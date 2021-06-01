@@ -11,4 +11,10 @@ python train.py
 python train_semi.py
 ```
 
+3. Baseline SVM
+```
+python baselines.py
+```
+
+
 detailed options in utils.py
