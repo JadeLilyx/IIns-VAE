@@ -8,174 +8,114 @@ import sys
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.nn.functional as f
 from torch.utils.data import DataLoader
-from torchvision import datasets
 from torch.autograd import Variable
+from torchvision import datasets
 
 from utils import *
 from dataset import *
 from models import *
+from baseline import svm_regressor
 
 import setproctitle
 import logging
 
 
-setproctitle.setproctitle("UWB_AE")
+def test_vl(opt, network, device, result_path, model_path, dataloader, epoch, data):
+    # different for val and test: result_path, epoch
+    network.eval()
+    
+    # Save experimental results (though also in train dir)
+    logging.basicConfig(filename=os.path.join(result_path, 'val_log.log'), level=logging.INFO)
+    logging.info("Started")
 
-# Set device
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-Tensor = torch.cuda.FloatTensor if torch.cuda.is_available() else torch.Tensor
+    # Load models from path
+    if epoch = 0:
+        Network.load_state_dict(torch.load(os.path.join(model_path, "Network_%d.pth" % epoch)))
+        Network.eval()
+    else:
+        print("No saved models in dirs.")
 
-# Get arguments
-parser = argparse.ArgumentParser()
-parser = get_args(parser)
-opt = parser.parse_args()
-print(opt)
+    # Evaluation initialization
+    rmse_error = 0.0
+    abs_error = 0.0
+    accuracy = 0.0
+    start_time = time.time()
 
-# Set model and result paths
-# opt.supervision_rate = 1.0
-# model_path = "./saved_models_semi/%s_mode_%s/SEMI%f_AE%d_Res%s_Cls%s_Rdim%dEdim%d" % (opt.dataset_env, opt.mode, opt.supervision_rate, opt.conv_type, opt.restorer_type, opt.classifier_type, opt.range_dim, opt.env_dim)
-# test_path = "./saved_results_semi/test/%s_mode_%s/SEMI%d_AE%d_Res%s_Cls%s_Rdim%dEdim%d" % (opt.dataset_env, opt.mode, opt.supervision_rate, opt.conv_type, opt.restorer_type, opt.classifier_type, opt.range_dim, opt.env_dim)
+    for i, batch in enumerate(dataloader):
 
-model_path = "./saved_models/%s_mode_%s/AE%d_Res%s_Cls%s_Rdim%dEdim%d" % (opt.dataset_env, opt.mode, opt.conv_type, opt.restorer_type, opt.classifier_type, opt.range_dim, opt.env_dim)
-test_path = "./saved_results/test/%s_mode_%s/AE%d_Res%s_Cls%s_Rdim%dEdim%d" % (opt.dataset_env, opt.mode, opt.conv_type, opt.restorer_type, opt.classifier_type, opt.range_dim, opt.env_dim)
+        # Set model input
+        cir_gt = batch["CIR"]
+        err_gt = batch["Err"]
+        label_gt = batch["Label"]
+        if torch.cuda.is_available():
+            cir_gt = cir_gt.cuda()
+            err_gt = err_gt.cuda()
+            label_gt = label_gt.to(device=device, dtype=torch.int64)
 
-# Load encoders, decoders and restorers
-len_cir = 157
-if opt.dataset_env == 'room_full':
-    opt.num_classes = 5
-elif opt.dataset_env == 'obstacle_full':
-    opt.num_classes = 10
-elif opt.dataset_env == 'room_part':
-    opt.num_classes = 3
-elif opt.dataset_env == 'room_full_rough':
-    opt.num_classes = 3
-elif opt.dataset_env == 'obstacle_part':
-    opt.num_classes = 4
-elif opt.dataset_env == 'obstacle_part2':
-    opt.num_classes = 2
-elif opt.dataset_env == 'room_full_rough2':
-    opt.num_classes = 2
-else:
-    print("Unknown environment.")
+        with torch.no_grad():
 
-scale_factor = 2 ** opt.n_downsample
+            # Get estimation results
+            label_est, err_est, env_latent = network(cir_gt)
 
-opt.if_expand = False if opt.conv_type == 1 else True
-if opt.conv_type == 1:
-    range_code_shape = (opt.range_dim, 128 // (2 ** opt.n_downsample))
-else:
-    range_code_shape = (opt.range_dim, 128 // (2 ** opt.n_downsample), 128 // (2 ** opt.n_downsample)) if opt.if_expand \
-        else (opt.range_dim, 128 // (2 ** opt.n_downsample), 1)  # (2, 8)
-# if opt.if_expand == False and opt.conv_type == 2:  # benefit recording
-#     opt.conv_type = 3  # conv2d without expansion
+            # Evaluation metrics
+            rmse_error += (torch.mean((err_est - err_gt) ** 2)) ** 0.5
+            abs_error += torch.mean(torch.abs(err_est - err_gt))
+            time_test = (time.time() - start_time) / 500 # batch_size
+            rmse_avg = rmse_error / (i + 1)
+            abs_avg = abs_error / (i + 1)
+            time_avg = time_test / (i + 1)
+            label_gt = label_gt.squeeze()
+            prediction = torch.argmax(label_est, dim=1)
+            accuracy += torch.sum(prediction == label_gt).float()
+            accuracy_avg = accuracy / (i + 1)
 
-Enc = Encoder(conv_type=opt.conv_type, dim=opt.dim, n_downsample=opt.n_downsample, n_residual=opt.n_residual,
-              style_dim=opt.env_dim, out_dim=opt.range_dim, expand=opt.if_expand).to(device)
-Dec = Decoder(conv_type=opt.conv_type, dim=opt.dim, n_upsample=opt.n_downsample, n_residual=opt.n_residual,
-              style_dim=opt.env_dim, in_dim=len_cir, out_dim=opt.range_dim, expand=opt.if_expand).to(device)
-Res = Restorer(code_shape=range_code_shape, soft=False, filters=opt.dim, conv_type=opt.conv_type, expand=opt.if_expand, net_type=opt.restorer_type).to(device)
-Cls = Classifier(env_dim=opt.env_dim, num_classes=opt.num_classes, filters=16, net_type=opt.classifier_type).to(device)
+            # Illustration figures
+            # latent env arrays
+            reduced_latents, labels = reduce_latents(env_latent, label_gt)
+            if i == 0:
+                latents_arr = reduce_latents
+                labels_arr = labels
+            else:
+                latents_arr = np.vstack((latents_arr, reduce_latents))
+                labels_arr = np.vstack((labels_arr, labels))
+            # range residual error arrays
+            err_real = err_gt.cpu().numpy()
+            err_fake = err_est.cpu().numpy()
+            if i == 0:
+                err_real_arr = err_real
+                err_fake_arr = err_fake
+            else:
+                err_real_arr = np.vstack((err_real_arr, err_real))
+                err_fake_arr = np.vstack((err_fake_arr, err_fake))
+        
+    # Print log (avg anyway here)
+    sys.stdout.write(
+        "\r[Data: %s/%s] [Model Type: Identifier%s_Regressor%s] [Test Epoch: %d] [Batch: %d/%d] \
+        [Error: rmse %f, abs %f, accuracy %f] [Test Time: %f]"
+        % (opt.dataset_name, opt.dataset_env, opt.identifier_type, opt.regressor_type, epoch, i, len(dataloader),
+        rmse_avg, abs_avg, accuracy_avg, time_avg)
+    )
+    logging.info(
+        "\r[Data: %s/%s] [Model Type: Identifier%s_Regressor%s] [Test Epoch: %d] [Batch: %d/%d] \
+        [Error: rmse %f, abs %f, accuracy %f] [Test Time: %f]"
+        % (opt.dataset_name, opt.dataset_env, opt.identifier_type, opt.regressor_type, epoch, i, len(dataloader),
+        rmse_avg, abs_avg, accuracy_avg, time_avg)
+    )
 
-if opt.test_epoch != 0:
-    Enc.load_state_dict(torch.load(os.path.join(model_path, "Enc_%d.pth" % opt.test_epoch)))
-    Dec.load_state_dict(torch.load(os.path.join(model_path, "Dec_%d.pth" % opt.test_epoch)))
-    Res.load_state_dict(torch.load(os.path.join(model_path, "Res_%d.pth" % opt.test_epoch)))
-    Cls.load_state_dict(torch.load(os.path.join(model_path, "Cls_%d.pth" % opt.test_epoch)))
-    Enc.eval()
-    Dec.eval()
-    Res.eval()
-    Cls.eval()
-else:
-    print("No saved models in dir.")
+    # Latent code visualization
+    visualize_latents(latents_arr, labels_arr, opt.dataset_env)
+    plt.savefig(os.path.join(save_path, "latent_env_epoch%d.png" % epoch))
+    plt.close()
 
-# Save experimental results
-os.makedirs(test_path, exist_ok=True)
-logging.basicConfig(filename=os.path.join(test_path, 'test_log.log'), level=logging.INFO)
-logging.info("Started")
-
-# Assign data for testing
-root = './data/data_zenodo/dataset.pkl'
-data_train, data_test, _, _ = err_mitigation_dataset(
-    root=root, dataset_name=opt.dataset_name, dataset_env=opt.dataset_env, split_factor=0.8, scaling=True, mode=opt.mode
-)
-
-# Configure dataloader for testing
-dataloader_test = DataLoader(
-    dataset=UWBDataset(data_test),
-    batch_size=500,
-    shuffle=True,
-    num_workers=1,
-)
-
-# Evaluation initialization
-rmse_error = 0.0
-abs_error = 0.0
-accuracy = 0.0
-
-
-# ============================
-#        Testing
-# ============================
-
-prev_time = time.time()
-
-for i, batch in enumerate(dataloader_test):
-
-    # Set model input
-    cir_gt = batch["CIR"]
-    err_gt = batch["Err"]
-    label_gt = batch["Label"]
-    if torch.cuda.is_available():
-        cir_gt = cir_gt.cuda()
-        err_gt = err_gt.cuda()
-        label_gt = label_gt.to(device=device, dtype=torch.int64)
-
-    with torch.no_grad():
-
-        # Get latent representation
-        range_code, env_code, env_code_rv, kl_div = Enc(cir_gt)
-
-        # 1) Reconstructed cir
-        cir_gen = Dec(range_code, env_code)
-
-        # 2) Estimated range error
-        err_fake = Res(range_code)
-
-        # 3) Estimated env label
-        label_fake = Cls(env_code)
-
-        # Evaluate
-        # range mitigation error
-        rmse_error += (torch.mean((err_fake - err_gt) ** 2)) ** 0.5
-        abs_error += torch.mean(torch.abs(err_fake - err_gt))
-        time_test = (time.time() - prev_time) / 500  # batch_size
-        rmse_avg = rmse_error / (i + 1)
-        abs_avg = abs_error / (i + 1)
-        time_avg = time_test / (i + 1)
-        # env classification error
-        label_gt = label_gt.squeeze()
-        label_gt = label_gt.to(device=device, dtype=torch.int64)
-        if opt.dataset_env == 'room_full':  # 0~4
-            prediction = torch.argmax(label_fake, dim=1)
-        else:
-            prediction = torch.argmax(label_fake, dim=1) + 1
-        accuracy += torch.sum(prediction == label_gt).float() / label_gt.shape[0]
-        accuracy_avg = accuracy / (i + 1)
-
-# Print log
-sys.stdout.write(
-    "\r[Model Name: AE%d_%s_%s] [Test Env: %s] [Test Epoch: %d] [RMSE: %f] [ABS ERROR: %f] [Accuracy: %f] [Test Time: %f]"
-    % (opt.conv_type, opt.restorer_type, opt.classifier_type, opt.dataset_env, opt.test_epoch, rmse_avg, abs_avg, accuracy_avg, time_avg)
-)
-logging.info(
-    "\r[Model Name: AE%d_%s_%s] [Test Env: %s] [Test Epoch: %d] [RMSE: %f] [ABS ERROR: %f] [Accuracy: %f] [Test Time: %f]"
-    % (opt.conv_type, opt.restorer_type, opt.classifier_type, opt.dataset_env, opt.test_epoch, rmse_avg, abs_avg, accuracy_avg, time_avg)
-)
-
-# Qualitative results
-with torch.no_grad():
-    # visualize_recon(test_path, opt.test_epoch, dataloader_test, Enc, Dec)
-    CDF_plot(opt, root, test_path, opt.test_epoch, dataloader_test, Enc, Res, use_competitor=True)
-    visualize_latent(test_path, opt.test_epoch, dataloader_test, opt.dataset_env, Enc, Cls)
+    # CDF plotting of range error
+    res_vl = np.abs(err_real_arr - err_fake_arr)
+    data_train, data_test = data
+    res_svm, err_gt, _ = svm_regressor(data_train, data_test)
+    CDF_plot(err_arr=err_real_arr, num=200, color='y')
+    CDF_plot(err_arr=res_em, num=200, color='purple')
+    CDF_plot(err_arr=res_svm, num=200, color='c')
+    plt.legend(["Original error", "Our method", "SVM"], loc='lower right')
+    plt.savefig(os.path.join(result_path, "CDF_epoch%d.png" % epoch))
+    plt.close()
