@@ -50,15 +50,27 @@ elif opt.dataset_name == 'ewine':
     opt.cir_len = 152
     opt.dataset_env = 'nlos'
     opt.num_classes = 2
-Network = VLNet().to(device)
+Enc = Encoder(conv_type=opt.ae_type, filters=opt.filters, n_residual=opt.n_residual, n_downsample=opt.n_downsample, env_dim=opt.env_dim, range_dim=opt.range_dim).to(device)
+Dec = Decoder(conv_type=opt.ae_type, filters=opt.filters, n_residual=opt.n_residual, n_upsample=opt.n_downsample, env_dim=opt.env_dim, range_dim=opt.range_dim, out_dim=opt.cir_len).to(device)
+Res = Restorer(use_soft=opt.use_soft, layer_type=opt.restorer_type, conv_type=opt.ae_type, range_dim=opt.range_dim, n_downsample=opt.n_downsample).to(device)
+Cly = Classifier(env_dim=opt.env_dim, num_classes=opt.num_classes, filters=16, layer_type=opt.classifier_type).to(device)
 
 # Create sample and checkpoint directories
-model_path = "./saved_models/data_%s_%s_mode_%s/ae%d_res%d_cls%d" % (opt.dataset_name, opt.dataset_env, opt.mode, opt.ae_type, opt.regressor_type, opt.classifier_type)
-train_path = "./saved_results/data_%s_%s_mode_%s/ae%d_res%d_cls%d" % (opt.dataset_name, opt.dataset_env, opt.mode, opt.ae_type, opt.regressor_type, opt.classifier_type)
-os.makedirs(model_path, exist_ok=True)
-os.makedirs(train_path, exist_ok=True)
-test_path = "./saved_results/test/data_%s_%s_mode_%s/ae%d_res%d_cls%d" % (opt.dataset_name, opt.dataset_env, opt.mode, opt.ae_type, opt.regressor_type, opt.classifier_type)
-os.makedirs(test_path, exist_ok=True)
+if opt.use_semi:
+    model_path = "./saved_models/data_%s_%s_mode_%s/ae%d_res%d_cly%d" % (opt.dataset_name, opt.dataset_env, opt.mode, opt.ae_type, opt.regressor_type, opt.classifier_type)
+    train_path = "./saved_results/data_%s_%s_mode_%s/ae%d_res%d_cly%d" % (opt.dataset_name, opt.dataset_env, opt.mode, opt.ae_type, opt.regressor_type, opt.classifier_type)
+    os.makedirs(model_path, exist_ok=True)
+    os.makedirs(train_path, exist_ok=True)
+    test_path = "./saved_results/test/data_%s_%s_mode_%s/ae%d_res%d_cly%d" % (opt.dataset_name, opt.dataset_env, opt.mode, opt.ae_type, opt.regressor_type, opt.classifier_type)
+    os.makedirs(test_path, exist_ok=True)
+else:
+    model_path = "./saved_models_semi%d/data_%s_%s_mode_%s/ae%d_res%d_cly%d" % (opt.supervision_rate, opt.dataset_name, opt.dataset_env, opt.mode, opt.ae_type, opt.regressor_type, opt.classifier_type)
+    train_path = "./saved_results_semi%d/data_%s_%s_mode_%s/ae%d_res%d_cly%d" % (opt.supervision_rate, opt.dataset_name, opt.dataset_env, opt.mode, opt.ae_type, opt.regressor_type, opt.classifier_type)
+    os.makedirs(model_path, exist_ok=True)
+    os.makedirs(train_path, exist_ok=True)
+    test_path = "./saved_results_semi%d/test/data_%s_%s_mode_%s/ae%d_res%d_cly%d" % (opt.supervision_rate, opt.dataset_name, opt.dataset_env, opt.mode, opt.ae_type, opt.regressor_type, opt.classifier_type)
+    os.makedirs(test_path, exist_ok=True)
+
 
 # Optimizers
 optimizer = torch.optim.Adam(
@@ -106,16 +118,17 @@ dataloader_test = DataLoader(
 
 # ------------- Training --------------
 
+# use test_vl() for validation in checkpoint epochs
 if opt.use_semi:
     train_vl_semi(
-        opt, network=Network,
+        opt, enc=Enc, dec=Dec, res=Res, cly=Cly,
         device=device, result_path=train_path, model_path=model_path, 
         dataloader=dataloader_train, val_dataloader=dataloader_test,
         optimizer=optimizer, lr_scheduler=lr_scheduler, data=data
     )
 else:
     train_vl(
-        opt, network=Network,
+        opt, enc=Enc, dec=Dec, res=Res, cly=Cly,
         device=device, result_path=train_path, model_path=model_path, 
         dataloader=dataloader_train, val_dataloader=dataloader_test,
         optimizer=optimizer, lr_scheduler=lr_scheduler, data=data
@@ -123,11 +136,24 @@ else:
 
 
 # ------------- Testing --------------
+# if opt.use_semi:
+#     test_vl_semi(
+#     opt=opt, network=Network,
+#     device=device, result_path=test_path, model_path=model_path, 
+#     dataloader=dataloader_test,
+#     epoch=opt.test_epoch, data=data
+# )
+# else:
+#     test_vl(
+#         opt=opt, network=Network,
+#         device=device, result_path=test_path, model_path=model_path, 
+#         dataloader=dataloader_test,
+#         epoch=opt.test_epoch, data=data
+#     )  # epoch for val and opt.test_epoch for test
 
 test_vl(
-    opt=opt, network=Network,
-    device=device, result_path=test_path, model_path=model_path, 
-    dataloader=dataloader_test,
-    epoch=opt.test_epoch, data=data
-)  # epoch for val and opt.test_epoch for test
-
+        opt=opt, enc=Enc, res=Res, cly=Cly,
+        device=device, result_path=test_path, model_path=model_path, 
+        dataloader=dataloader_test,
+        epoch=opt.test_epoch, data=data
+    )  # epoch for val and opt.test_epoch for test

@@ -41,7 +41,7 @@ def get_args(parser):
     parser.add_argument("--filters", type=int, default=4, help="number of filters in first encoder layer")
     parser.add_argument("--env_dim", type=int, default=10, help="dimensionality of the env code")
     parser.add_argument("--range_dim", type=int, default=10, help="dimensionality of the range code")
-    # parser.add_argument("--conv_type", type=int, default=2, help="use 1 dim or 2 dim for convolution")
+    parser.add_argument("--ae_type", type=int, default=2, help="structure for autoencoder, 1 for conv1d and 2 for conv2d")
     # parser.add_argument("--if_expand", type=bool, default=False, help="Expand the cir signal to square or not")
     parser.add_argument("--restorer_type", type=int, default=1, help="structure for identifier for label, 1 for linear, 2 for conv1d, and 3 for conv2d")
     parser.add_argument("--classifier_type", type=int, default=1, help="structure for regressor for ranging error, 1 for linear, 2 for conv1d, 3 for conv2d")
@@ -50,6 +50,10 @@ def get_args(parser):
     # check epochs
     parser.add_argument("--sample_interval", type=int, default=20, help="epoch interval saving generator samples")
     parser.add_argument("--checkpoint_interval", type=int, default=50, help="epoch interval between saving model checkpoint")
+
+    # semi-supervised learning
+    parser.add_argument("--use_semi", type=bool, default=False, help="If use semi-supervised learning manner")
+    parser.add_argument("--supervision_rate", type=int, default=8, help="Rate of labeled data to pure cir data")
 
     return parser
 

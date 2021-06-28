@@ -21,7 +21,7 @@ import setproctitle
 import logging
 
 
-setproctitle.setproctitle("UWB_AE")
+setproctitle.setproctitle("UWB_VL")
 
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -35,72 +35,54 @@ print(opt)
 
 # Set model and result paths
 # model_path_2 = "./saved_models_semi/%s_mode_%s/SEMI%f_AE%d_Res%s_Cls%s_Rdim%dEdim%d" % (opt.dataset_env, opt.mode, opt.conv_type, opt.restorer_type, opt.classifier_type, opt.range_dim, opt.env_dim)
-model_path_1 = "./saved_models_semi/room_full_mode_full/SEMI0.100000_AE2_ResLinear_ClsLinear_Rdim10Edim10"
-model_path_2 = "./saved_models_semi/room_full_mode_full/SEMI0.200000_AE2_ResLinear_ClsLinear_Rdim10Edim10"
-model_path_4 = "./saved_models_semi/room_full_mode_full/SEMI0.400000_AE2_ResLinear_ClsLinear_Rdim10Edim10"
-model_path_6 = "./saved_models_semi/room_full_mode_full/SEMI0.600000_AE2_ResLinear_ClsLinear_Rdim10Edim10"
-model_path_8 = "./saved_models_semi/room_full_mode_full/SEMI0.800000_AE2_ResLinear_ClsLinear_Rdim10Edim10"
-model_path_10 = "./saved_models_semi/room_full_mode_full/SEMI1.000000_AE2_ResLinear_ClsLinear_Rdim10Edim10"
-test_path = "./saved_results_semi/test"
+model_path_1 = "./saved_models_semi1/data_ewine_nlos_mode_full/ae2_res1_cly1"
+model_path_2 = "./saved_models_semi2/data_ewine_nlos_mode_full/ae2_res1_cly1"
+model_path_4 = "./saved_models_semi4/data_ewine_nlos_mode_full/ae2_res1_cly1"
+model_path_6 = "./saved_models_semi6/data_ewine_nlos_mode_full/ae2_res1_cly1"
+model_path_8 = "./saved_models_semi8/data_ewine_nlos_mode_full/ae2_res1_cly1"
+model_path_10 = "./saved_models_semi10/data_ewine_nlos_mode_full/ae2_res1_cly1"
+test_path = "./saved_results_semi/test_compare"
 
 # Load encoders, decoders and restorers
-len_cir = 157
-if opt.dataset_env == 'room_full':
-    opt.num_classes = 5
-# elif opt.dataset_env == 'obstacle_full':
-#     opt.num_classes = 10
-# elif opt.dataset_env == 'room_part':
-#     opt.num_classes = 3
-# elif opt.dataset_env == 'room_full_rough':
-#     opt.num_classes = 3
-# elif opt.dataset_env == 'obstacle_part':
-#     opt.num_classes = 4
-# elif opt.dataset_env == 'obstactle_part2':
-#     opt.num_classes = 2
-# elif opt.dataset_env == 'room_full_rough2':
-#     opt.num_classes = 2
-else:
-    print("Unknown environment.")
-
-scale_factor = 2 ** opt.n_downsample
-
-opt.if_expand = False if opt.conv_type == 1 else True
-if opt.conv_type == 1:
-    range_code_shape = (opt.range_dim, 128 // (2 ** opt.n_downsample))
-else:
-    range_code_shape = (opt.range_dim, 128 // (2 ** opt.n_downsample), 128 // (2 ** opt.n_downsample)) if opt.if_expand \
-        else (opt.range_dim, 128 // (2 ** opt.n_downsample), 1)  # (2, 8)
-# if opt.if_expand == False and opt.conv_type == 2:  # benefit recording
-#     opt.conv_type = 3  # conv2d without expansion
+if opt.dataset_name == 'zenodo':
+    opt.cir_len = 157
+    if opt.dataset_env == 'room_full':
+        opt.num_classes = 5
+    elif opt.dataset_env == 'obstacle_full':
+        opt.num_classes = 10
+    elif opt.dataset_env == 'nlos':
+        opt.num_classes = 2
+    elif opt.dataset_env == 'room_part':
+        opt.num_classes = 3
+    elif opt.data_env == 'obstacle_part':
+        opt.num_classes = 4
+elif opt.dataset_name == 'ewine':
+    opt.cir_len = 152
+    opt.dataset_env = 'nlos'
+    opt.num_classes = 2
 
 # semi 0.1
-Enc1 = Encoder(conv_type=opt.conv_type, dim=opt.dim, n_downsample=opt.n_downsample, n_residual=opt.n_residual,
-              style_dim=opt.env_dim, out_dim=opt.range_dim, expand=opt.if_expand).to(device)
-Res1 = Restorer(code_shape=range_code_shape, soft=False, filters=opt.dim, conv_type=opt.conv_type, expand=opt.if_expand, net_type=opt.restorer_type).to(device)
+Enc1 = Encoder(conv_type=opt.ae_type, filters=opt.filters, n_residual=opt.n_residual, n_downsample=opt.n_downsample, env_dim=opt.env_dim, range_dim=opt.range_dim).to(device)
+Res1 = Restorer(use_soft=opt.use_soft, layer_type=opt.restorer_type, conv_type=opt.ae_type, range_dim=opt.range_dim, n_downsample=opt.n_downsample).to(device)
 # semi 0.2
-Enc2 = Encoder(conv_type=opt.conv_type, dim=opt.dim, n_downsample=opt.n_downsample, n_residual=opt.n_residual,
-              style_dim=opt.env_dim, out_dim=opt.range_dim, expand=opt.if_expand).to(device)
-Res2 = Restorer(code_shape=range_code_shape, soft=False, filters=opt.dim, conv_type=opt.conv_type, expand=opt.if_expand, net_type=opt.restorer_type).to(device)
+Enc2 = Encoder(conv_type=opt.ae_type, filters=opt.filters, n_residual=opt.n_residual, n_downsample=opt.n_downsample, env_dim=opt.env_dim, range_dim=opt.range_dim).to(device)
+Res2 = Restorer(use_soft=opt.use_soft, layer_type=opt.restorer_type, conv_type=opt.ae_type, range_dim=opt.range_dim, n_downsample=opt.n_downsample).to(device)
 # Cls2 = Classifier(env_dim=opt.env_dim, num_classes=opt.num_classes, filters=16, net_type=opt.classifier_type).to(device)
 # semi 0.4
-Enc4 = Encoder(conv_type=opt.conv_type, dim=opt.dim, n_downsample=opt.n_downsample, n_residual=opt.n_residual,
-              style_dim=opt.env_dim, out_dim=opt.range_dim, expand=opt.if_expand).to(device)
-Res4 = Restorer(code_shape=range_code_shape, soft=False, filters=opt.dim, conv_type=opt.conv_type, expand=opt.if_expand, net_type=opt.restorer_type).to(device)
+Enc4 = Encoder(conv_type=opt.ae_type, filters=opt.filters, n_residual=opt.n_residual, n_downsample=opt.n_downsample, env_dim=opt.env_dim, range_dim=opt.range_dim).to(device)
+Res4 = Restorer(use_soft=opt.use_soft, layer_type=opt.restorer_type, conv_type=opt.ae_type, range_dim=opt.range_dim, n_downsample=opt.n_downsample).to(device)
 # Cls4 = Classifier(env_dim=opt.env_dim, num_classes=opt.num_classes, filters=16, net_type=opt.classifier_type).to(device)
 # semi 0.6
-Enc6 = Encoder(conv_type=opt.conv_type, dim=opt.dim, n_downsample=opt.n_downsample, n_residual=opt.n_residual,
-              style_dim=opt.env_dim, out_dim=opt.range_dim, expand=opt.if_expand).to(device)
-Res6 = Restorer(code_shape=range_code_shape, soft=False, filters=opt.dim, conv_type=opt.conv_type, expand=opt.if_expand, net_type=opt.restorer_type).to(device)
+Enc6 = Encoder(conv_type=opt.ae_type, filters=opt.filters, n_residual=opt.n_residual, n_downsample=opt.n_downsample, env_dim=opt.env_dim, range_dim=opt.range_dim).to(device)
+Res6 = Restorer(use_soft=opt.use_soft, layer_type=opt.restorer_type, conv_type=opt.ae_type, range_dim=opt.range_dim, n_downsample=opt.n_downsample).to(device)
 # Cls6 = Classifier(env_dim=opt.env_dim, num_classes=opt.num_classes, filters=16, net_type=opt.classifier_type).to(device)
 # semi 0.8
-Enc8 = Encoder(conv_type=opt.conv_type, dim=opt.dim, n_downsample=opt.n_downsample, n_residual=opt.n_residual,
-              style_dim=opt.env_dim, out_dim=opt.range_dim, expand=opt.if_expand).to(device)
-Res8 = Restorer(code_shape=range_code_shape, soft=False, filters=opt.dim, conv_type=opt.conv_type, expand=opt.if_expand, net_type=opt.restorer_type).to(device)
+Enc8 = Encoder(conv_type=opt.ae_type, filters=opt.filters, n_residual=opt.n_residual, n_downsample=opt.n_downsample, env_dim=opt.env_dim, range_dim=opt.range_dim).to(device)
+Res8 = Restorer(use_soft=opt.use_soft, layer_type=opt.restorer_type, conv_type=opt.ae_type, range_dim=opt.range_dim, n_downsample=opt.n_downsample).to(device)
 # Cls8 = Classifier(env_dim=opt.env_dim, num_classes=opt.num_classes, filters=16, net_type=opt.classifier_type).to(device)
 # semi 1.0
-Enc10 = Encoder(conv_type=opt.conv_type, dim=opt.dim, n_downsample=opt.n_downsample, n_residual=opt.n_residual,
-              style_dim=opt.env_dim, out_dim=opt.range_dim, expand=opt.if_expand).to(device)
-Res10 = Restorer(code_shape=range_code_shape, soft=False, filters=opt.dim, conv_type=opt.conv_type, expand=opt.if_expand, net_type=opt.restorer_type).to(device)
+Enc10 = Encoder(conv_type=opt.ae_type, filters=opt.filters, n_residual=opt.n_residual, n_downsample=opt.n_downsample, env_dim=opt.env_dim, range_dim=opt.range_dim).to(device)
+Res10 = Restorer(use_soft=opt.use_soft, layer_type=opt.restorer_type, conv_type=opt.ae_type, range_dim=opt.range_dim, n_downsample=opt.n_downsample).to(device)
 # Cls10 = Classifier(env_dim=opt.env_dim, num_classes=opt.num_classes, filters=16, net_type=opt.classifier_type).to(device)
 
 
@@ -134,7 +116,7 @@ else:
 
 # Save experimental results
 os.makedirs(test_path, exist_ok=True)
-logging.basicConfig(filename=os.path.join(test_path, 'test_log.log'), level=logging.INFO)
+logging.basicConfig(filename=os.path.join(test_path, 'test_log_semi_compare.log'), level=logging.INFO)
 logging.info("Started")
 
 # Assign data for testing
