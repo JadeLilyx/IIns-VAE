@@ -343,7 +343,7 @@ class Decoder1d(nn.Module):
         for _ in range(n_upsample):
             layers += [
                 nn.Upsample(scale_factor=2),  # (64, 16)
-                nn.Conv1d(filters, filters // 2, 5, stride=1, padding=2)  # (32, 16)
+                nn.Conv1d(filters, filters // 2, 5, stride=1, padding=2),  # (32, 16)
                 LayerNorm(filters // 2),
                 nn.ReLU(inplace=True)
             ]
@@ -415,7 +415,7 @@ class Decoder2d(nn.Module):
         for _ in range(n_upsample):
             layers += [
                 nn.Upsample(scale_factor=2),  # (64, 16)
-                nn.Conv2d(filters, filters // 2, 5, stride=1, padding=2)  # (32, 16)
+                nn.Conv2d(filters, filters // 2, 5, stride=1, padding=2),  # (32, 16)
                 LayerNorm(filters // 2),
                 nn.ReLU(inplace=True)
             ]
@@ -525,7 +525,7 @@ class RestorerConv1d(nn.Module):
 
         def conv_block(in_filters, out_filters, bn=True):
             block = [
-                nn.Conv1d(in_filters, out_filters, 4, 2, 1)
+                nn.Conv1d(in_filters, out_filters, 4, 2, 1),
                 nn.LeakyReLU(0.2, inplace=True),
                 nn.Dropout(0.25)
             ]
@@ -585,7 +585,7 @@ class RestorerConv2d(nn.Module):
 
         def conv_block(in_filters, out_filters, bn=True):
             block = [
-                nn.Conv2d(in_filters, out_filters, 4, 2, 1)
+                nn.Conv2d(in_filters, out_filters, 4, 2, 1),
                 nn.LeakyReLU(0.2, inplace=True),
                 nn.Dropout(0.25)
             ]
@@ -643,7 +643,7 @@ class RestorerConv2d(nn.Module):
 
 class ClassifierLinear(nn.Module):
     """Constrain env code with environment labels."""
-    def __init__(self, env_dim, num_classes, filters==16):
+    def __init__(self, env_dim, num_classes, filters=16):
         super(ClassifierLinear, self).__init__()
 
         self.env_dim = env_dim  # // 2 for rv

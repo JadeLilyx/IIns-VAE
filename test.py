@@ -15,14 +15,14 @@ from torchvision import datasets
 
 from utils import *
 from dataset import *
-from models import *
+from model import *
 from baseline import svm_regressor
 
 import setproctitle
 import logging
 
 
-def test_vl(opt, network, device, result_path, model_path, dataloader, epoch, data):
+def test_vl(opt, enc, dec, res, cly, device, result_path, model_path, dataloader, epoch, data):
     # different for val and test: result_path, epoch
     network.eval()
     
@@ -31,9 +31,15 @@ def test_vl(opt, network, device, result_path, model_path, dataloader, epoch, da
     logging.info("Started")
 
     # Load models from path
-    if epoch = 0:
-        Network.load_state_dict(torch.load(os.path.join(model_path, "Network_%d.pth" % epoch)))
-        Network.eval()
+    if epoch == 0:
+        enc.load_state_dict(torch.load(os.path.join(model_path, "Enc_%d.pth" % epoch)))
+        enc.eval()
+        dec.load_state_dict(torch.load(os.path.join(model_path, "Dec_%d.pth" % epoch)))
+        dec.eval()
+        res.load_state_dict(torch.load(os.path.join(model_path, "Res_%d.pth" % epoch)))
+        res.eval()
+        cly.load_state_dict(torch.load(os.path.join(model_path, "Cly_%d.pth" % epoch)))
+        cly.eval()
     else:
         print("No saved models in dirs.")
 
@@ -106,7 +112,7 @@ def test_vl(opt, network, device, result_path, model_path, dataloader, epoch, da
 
     # Latent code visualization
     visualize_latents(latents_arr, labels_arr, opt.dataset_env)
-    plt.savefig(os.path.join(save_path, "latent_env_epoch%d.png" % epoch))
+    plt.savefig(os.path.join(result_path, "latent_env_epoch%d.png" % epoch))
     plt.close()
 
     # CDF plotting of range error
@@ -114,7 +120,7 @@ def test_vl(opt, network, device, result_path, model_path, dataloader, epoch, da
     data_train, data_test = data
     res_svm, err_gt, _ = svm_regressor(data_train, data_test)
     CDF_plot(err_arr=err_real_arr, num=200, color='y')
-    CDF_plot(err_arr=res_em, num=200, color='purple')
+    CDF_plot(err_arr=res_svm, num=200, color='purple')
     CDF_plot(err_arr=res_svm, num=200, color='c')
     plt.legend(["Original error", "Our method", "SVM"], loc='lower right')
     plt.savefig(os.path.join(result_path, "CDF_epoch%d.png" % epoch))

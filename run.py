@@ -15,8 +15,10 @@ from torch.autograd import Variable
 
 from utils import *
 from dataset import *
-from models import *
+from model import *
 from baseline import svm_regressor
+from train import *
+from test import *
 
 import setproctitle
 import logging
@@ -57,24 +59,24 @@ Cly = Classifier(env_dim=opt.env_dim, num_classes=opt.num_classes, filters=16, l
 
 # Create sample and checkpoint directories
 if opt.use_semi:
-    model_path = "./saved_models/data_%s_%s_mode_%s/ae%d_res%d_cly%d" % (opt.dataset_name, opt.dataset_env, opt.mode, opt.ae_type, opt.regressor_type, opt.classifier_type)
-    train_path = "./saved_results/data_%s_%s_mode_%s/ae%d_res%d_cly%d" % (opt.dataset_name, opt.dataset_env, opt.mode, opt.ae_type, opt.regressor_type, opt.classifier_type)
+    model_path = "./saved_models/data_%s_%s_mode_%s/ae%d_res%d_cly%d" % (opt.dataset_name, opt.dataset_env, opt.mode, opt.ae_type, opt.restorer_type, opt.classifier_type)
+    train_path = "./saved_results/data_%s_%s_mode_%s/ae%d_res%d_cly%d" % (opt.dataset_name, opt.dataset_env, opt.mode, opt.ae_type, opt.restorer_type, opt.classifier_type)
     os.makedirs(model_path, exist_ok=True)
     os.makedirs(train_path, exist_ok=True)
-    test_path = "./saved_results/test/data_%s_%s_mode_%s/ae%d_res%d_cly%d" % (opt.dataset_name, opt.dataset_env, opt.mode, opt.ae_type, opt.regressor_type, opt.classifier_type)
+    test_path = "./saved_results/test/data_%s_%s_mode_%s/ae%d_res%d_cly%d" % (opt.dataset_name, opt.dataset_env, opt.mode, opt.ae_type, opt.restorer_type, opt.classifier_type)
     os.makedirs(test_path, exist_ok=True)
 else:
-    model_path = "./saved_models_semi%d/data_%s_%s_mode_%s/ae%d_res%d_cly%d" % (opt.supervision_rate, opt.dataset_name, opt.dataset_env, opt.mode, opt.ae_type, opt.regressor_type, opt.classifier_type)
-    train_path = "./saved_results_semi%d/data_%s_%s_mode_%s/ae%d_res%d_cly%d" % (opt.supervision_rate, opt.dataset_name, opt.dataset_env, opt.mode, opt.ae_type, opt.regressor_type, opt.classifier_type)
+    model_path = "./saved_models_semi%d/data_%s_%s_mode_%s/ae%d_res%d_cly%d" % (opt.supervision_rate, opt.dataset_name, opt.dataset_env, opt.mode, opt.ae_type, opt.restorer_type, opt.classifier_type)
+    train_path = "./saved_results_semi%d/data_%s_%s_mode_%s/ae%d_res%d_cly%d" % (opt.supervision_rate, opt.dataset_name, opt.dataset_env, opt.mode, opt.ae_type, opt.restorer_type, opt.classifier_type)
     os.makedirs(model_path, exist_ok=True)
     os.makedirs(train_path, exist_ok=True)
-    test_path = "./saved_results_semi%d/test/data_%s_%s_mode_%s/ae%d_res%d_cly%d" % (opt.supervision_rate, opt.dataset_name, opt.dataset_env, opt.mode, opt.ae_type, opt.regressor_type, opt.classifier_type)
+    test_path = "./saved_results_semi%d/test/data_%s_%s_mode_%s/ae%d_res%d_cly%d" % (opt.supervision_rate, opt.dataset_name, opt.dataset_env, opt.mode, opt.ae_type, opt.restorer_type, opt.classifier_type)
     os.makedirs(test_path, exist_ok=True)
 
 
 # Optimizers
 optimizer = torch.optim.Adam(
-    Network.parameters(),
+    itertools.chain(Enc.parameters(), Dec.parameters(), Res.parameters(), Cly.parameters()),
     lr=opt.lr,
     betas=(opt.b1, opt.b2)
 )

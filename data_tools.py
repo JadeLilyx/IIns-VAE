@@ -9,8 +9,7 @@ import joblib
 import matplotlib.pyplot as plt
 
 
-# ---------------- tools for ewine dataset -----------------
-
+# ------------=- tools for ewine dataset ---------------------
 def load_data_from_file(filepath):
     """
     Read selected .csv file to numpy array
@@ -19,17 +18,17 @@ def load_data_from_file(filepath):
         + dataset1
         |__ tag_room0.csv
     """
-    print("Loading " + filepath + "...")
+    # print("Loading" + filepath + "...")
     # read data from file
     df = pd.read_csv(filepath, sep=',', header=0)
     output_arr = df.values
-
+    
     return output_arr
 
 
 def load_data_from_folder(folderpath):
     """
-    Read selected .csv file to numpy array (in an inner folder)
+    Read selected .csv file to numpy array (in an inner folder with several .csv files)
 
     for dataset folder like './dataset2/tag_room1/':
         + dataset2
@@ -42,11 +41,14 @@ def load_data_from_folder(folderpath):
     rootdir = folderpath
     output_arr = []
     first = 1
+    # folderpath = './dataset2/tag_room1/'
     for dirpath, dirnames, filenames in os.walk(rootdir):
         for file in filenames:
-            filename = os.path.join(dirpath, file):
-            # read data from file
-            input_data = load_data_from_file(filename)
+            filename = os.path.join(dirpath, file)
+            print("Loading " + filename + "...")
+            # read data from array
+            df = pd.read_csv(filename, sep=',', header=0)
+            input_data = df.values
             # append to array
             if first > 0:
                 first = 0
@@ -54,45 +56,45 @@ def load_data_from_folder(folderpath):
             else:
                 output_arr = np.vstack((output_arr, input_data))
 
-        return output_arr
+    return output_arr
 
 
-def load_reg_data(folderpaths):  # filepaths
+def load_reg_data(filepaths):
     """
-    Calculate range error and import cir data
+    Calculate ranging error and import cir data
 
     Parameters
-    ------------
+    -----------
     filepaths: str, absolute path to input .csv file
 
-    Return
+    Returns
     ---------
-    cir_arr: numpy.array
-        array of cir vectors from .csv file
     error_arr: numpy.array
-        array of range errors from input data
-    label_arr: numpy.array
-        array of nlos label from input data
+        array of ranging errors from input data
+    cir_arr: numpy.array
+        array of cir vectors from .csv file (length=152)
     """
-    # read fata from files
-    input_arr = load_data_from_folder(folderpaths[0])  # filepaths
-    if len(folderpaths) > 1:
-        for item in folderpaths[1:]:
-            temp = load_data_from_folder(item)
+    # read data from files
+    input_arr = load_data_from_file(filepaths[0])
+    print("Loading " + filepaths[0] + "...")
+    if len(filepaths) > 1:
+        for item in filepaths[1:]:
+            print("Loading " + item + "...")
+            temp = load_data_from_file(item)
             input_arr = np.vstack((input_arr, temp))
 
     # randomize input array
     np.random.shuffle(input_arr)
 
-    # create blank output_arrays for cir, error, and label
+    # create blank output_Arrays for error and cir
     data_len = 152
-    cir_arr = np.zeros((len(input_arr), data_len))
     error_arr = np.zeros((len(input_arr), 1))
     label_arr = np.zeros((len(input_arr), 1))
+    cir_arr = np.zeros((len(input_arr), data_len))
 
     for i in range(len(input_arr)):
         fp_idx = int(input_arr[i][8])
-        # calculate range error
+        # calculate ranging error
         error_arr[i] = math.fabs(
             math.sqrt(
                 math.pow(input_arr[i][0] - input_arr[i][2], 2) +
@@ -100,65 +102,26 @@ def load_reg_data(folderpaths):  # filepaths
             ) - input_arr[i][4]
         )  # d_{GT} - d_{M}
 
-        # pack nlos label: 1 for nlos and 0 for los
+        # pack nlos label, 1 if nlos and 0 if los
         label_arr[i] = input_arr[i][5]
 
         # pack cir to output cir array (cir/max_amplitude)
         cir_arr[i] = input_arr[i][fp_idx + 15: fp_idx + 15 + data_len] / float(input_arr[i][17])
 
-    return cir_arr, err_arr, label_arr
+    # print(cir_arr.shape)
+    return cir_arr, error_arr, label_arr
 
 
-# ------------------ tools for zenodo dataset ----------------
-
+#--------------- tools for zenodo dataset --------------------
 def load_pkl_data(filepath, option=None):
     print("Loading " + filepath + "...")
-    # read data from pkl file
+    # read data from file
     data = pd.read_pickle(filepath)
 
     cir_arr = []
     err_arr = []
     label_arr = []
-    if option == 'nlos' or option is None:  # 0, 1
-        ds_los = np.asarray(data.loc[data['Obstacles']=='0000000000'][['CIR', 'Error', 'Room']])
-        cir_arr_los = np.vstack(ds_los[:, 0])
-        err_arr_los = np.vstack(ds_los[:, 1])
-        label_arr_los = np.zeros((cir_arr_los.shape[0], 1))
-        lroom_arr_los = np.vstack(ds_los[:, 2])
-        print("los samples: ", cir_arr_los.shape[0])
-
-        number = 1
-        for i in range(1, 11):
-            target_str = '0' * (10 - i) + str(number)
-            print(target_str)  # one-hot version
-            ds_nlos_i = np.asarray(data.loc[data['Obstacles']==target_str][['CIR', 'Error', 'Room']])
-            cir_arr_nlos_i = np.vstack(ds_nlos[:, 0])
-            err_arr_nlos_i = np.vstack(ds_nlos[:, 1])
-            lroom_arr_nlos_i = np.vstack(ds_nlos_i[:, 2])
-            if i == 0:
-                cir_arr_nlos = cir_arr_nlos_i
-                err_arr_nlos = err_arr_nlos_i
-                lroom_arr_nlos = lroom_arr_nlos_i
-            else:
-                cir_arr_nlos = np.vstack((cir_arr_nlos, cir_arr_nlos_i))
-                err_arr_nlos = np.vstack((err_arr_nlos, err_arr_nlos_i))
-                lroom_arr_nlos = np.vstack((lroom_arr_nlos, lroom_arr_nlos_i))
-            number *= 10
-        label_arr_nlos = np.ones((cir_arr_nlos.shape[0], 1))
-        print("nlos samples: ", cir_arr_nlos.shape[0])
-
-        cir_arr = np.vstack((cir_arr_los, cir_arr_nlos))
-        err_arr = np.vstack((err_arr_los, err_arr_nlos))
-        label_arr = np.vstack((label_arr_los, label_arr_nlos))
-        lroom_arr = np.vstack((lroom_arr_los, lroom_arr_nlos))
-        data_module = np.hstack((cir_arr, err_arr, label_arr, lroom_arr))
-        np.random.shuffle(data_module)
-        cir_arr = data_module[:, 0:len(cir_arr[0])]
-        err_arr = data_module[:, len(cir_arr[0]):len(cir_arr[0])]
-        label_arr = data_module[:, len(cir_arr[0])+1:len(cir_arr[0])+2]
-        lroom_arr = data_module[:, len(cir_arr[0])+2:]
-
-    elif option == 'room_full':
+    if option == 'room_full' or option is None:  # full, 55158
         # select samples with room label 0~4
         ds = np.asarray(data[['CIR', 'Error', 'Room']])
         np.random.shuffle(ds)
@@ -168,13 +131,13 @@ def load_pkl_data(filepath, option=None):
         lroom_arr = label_arr
 
     elif option == 'obstacle_full':
-        # select samples with 10 obstacles 0~9
-        ds_1 = np.asarray(data.loc[data['Obstacles']=='0000000001'][['CIR', 'Error', 'Room']])
+        # select samples with 10 obstacle labels 0~9
+        ds_1 = np.asarray(data.loc[data['Obstacles']=='0000000001'][['CIR', 'Error', 'Room']])  # 'Obstacles'
         ds_1 = np.asarray([np.array(x) for x in ds_1])
         cir_arr_1 = np.vstack(ds_1[:, 0])
         err_arr_1 = np.vstack(ds_1[:, 1])
         label_arr_1 = np.zeros((cir_arr_1.shape[0], 1))  # 3987
-        lroom_arr_1 = np.vstack(ds_1[:, 2])  # additional room label for paper mode
+        lroom_arr_1 = np.vstack(ds_1[:, 2])  # additional room label for train/test assign
 
         ds_2 = np.asarray(data.loc[data['Obstacles']=='0000000010'][['CIR', 'Error', 'Room']])
         ds_2 = np.asarray([np.array(x) for x in ds_1])
@@ -248,6 +211,45 @@ def load_pkl_data(filepath, option=None):
         cir_arr = data_module[:, 0:len(cir_arr[0])]
         err_arr = data_module[:, len(cir_arr[0]):len(cir_arr[0])+1]
         label_arr = data_module[:, len(cir_arr[0])+1:len(cir_arr[0])+2]  # 26553
+        lroom_arr = data_module[:, len(cir_arr[0])+2:]
+    
+    elif option == 'nlos':  # 0~1
+        ds_los = np.asarray(data.loc[data['Obstacles']=='0000000000'][['CIR', 'Error', 'Room']])
+        cir_arr_los = np.vstack(ds_los[:, 0])
+        err_arr_los = np.vstack(ds_los[:, 1])
+        label_arr_los = np.zeros((cir_arr_los.shape[0], 1))
+        lroom_arr_los = np.vstack(ds_los[:, 2])
+        # print("los samples: ", cir_arr_los.shape[0])  # 4691
+
+        number = 1
+        for i in range(1, 4):  # 11
+            target_str = '0' * (10 - i) + str(number)
+            # print(target_str)  # one-hot version
+            ds_nlos_i = np.asarray(data.loc[data['Obstacles']==target_str][['CIR', 'Error', 'Room']])
+            cir_arr_nlos_i = np.vstack(ds_nlos_i[:, 0])
+            err_arr_nlos_i = np.vstack(ds_nlos_i[:, 1])
+            lroom_arr_nlos_i = np.vstack(ds_nlos_i[:, 2])
+            if i == 1:
+                cir_arr_nlos = cir_arr_nlos_i
+                err_arr_nlos = err_arr_nlos_i
+                lroom_arr_nlos = lroom_arr_nlos_i
+            else:
+                cir_arr_nlos = np.vstack((cir_arr_nlos, cir_arr_nlos_i))
+                err_arr_nlos = np.vstack((err_arr_nlos, err_arr_nlos_i))
+                lroom_arr_nlos = np.vstack((lroom_arr_nlos, lroom_arr_nlos_i))
+            number *= 10
+        label_arr_nlos = np.ones((cir_arr_nlos.shape[0], 1))
+        # print("nlos samples: ", cir_arr_nlos.shape[0])  # 6657 for 3 and 26553 for 10 (range(1, 11))
+
+        cir_arr = np.vstack((cir_arr_los, cir_arr_nlos))
+        err_arr = np.vstack((err_arr_los, err_arr_nlos))
+        label_arr = np.vstack((label_arr_los, label_arr_nlos))
+        lroom_arr = np.vstack((lroom_arr_los, lroom_arr_nlos))
+        data_module = np.hstack((cir_arr, err_arr, label_arr, lroom_arr))
+        np.random.shuffle(data_module)
+        cir_arr = data_module[:, 0:len(cir_arr[0])]
+        err_arr = data_module[:, len(cir_arr[0]):len(cir_arr[0])+1]
+        label_arr = data_module[:, len(cir_arr[0])+1:len(cir_arr[0])+2]
         lroom_arr = data_module[:, len(cir_arr[0])+2:]
 
     elif option == 'room_part':
@@ -412,7 +414,7 @@ def feature_extraction(cir_data):
         feature.append([Er[index1], T_EMD[index1], T_RMS[index1], Kur[index1], R_T[index1], M_AMP[index1]])
 
     return np.asarray(feature)
-
+            
 
 def label_dictionary(dataset_env):
 
@@ -459,28 +461,34 @@ if __name__ == '__main__':
     parser.add_argument("--dataset_env", type=str, default="nlos", help="dataset of different environments")
     opt = parser.parse_args()
 
-    # import extracted cir, err, and label
+    # import extracted err and cir
     os.makedirs("saved_results", exist_ok=True)
     if opt.dataset_name == 'zenodo':
-        root = 'data/data_zenodo/dataset.pkl'
-        cir_reg, err_reg, label_reg, lroom_reg = load_pkl_data(root, option=opt.dataset_env)
+        cir_reg, err_reg, label_reg, lroom_reg = load_pkl_data('data/data_zenodo/dataset.pkl', option=opt.dataset_env)
         plt.plot(cir_reg[0], color='blue')
         label_int = label_reg[0][0]
-        label_str = label_int2str(opt.dataset_env, label_reg)
-        
+        label_str = label_int2str(opt.dataset_env, label_int)
+        plt.savefig("saved_results/%s_sample_%s.png" % (opt.dataset_name, label_str))
+        plt.close()
     elif opt.dataset_name == 'ewine':
-        folderpaths = [
-            'data/data_ewine/dataset_reg1/',  # tag_room0.csv, tag_room1.csv
-            'data/data_ewine/dataset_reg2/',  # tag_room0.csv
-            'data/data_ewine/dataset_reg2/tag_room1/'
-        ]
-        cir_reg, err_reg, label_reg = load_reg_data(folderpaths)
+        filepaths = ['./data/data_ewine/dataset1/tag_room0.csv',
+                     './data/data_ewine/dataset1/tag_room1.csv',
+                     './data/data_ewine/dataset2/tag_room0.csv',
+                     './data/data_ewine/dataset2/tag_room1/tag_room1_part0.csv',
+                     './data/data_ewine/dataset2/tag_room1/tag_room1_part1.csv',
+                     './data/data_ewine/dataset2/tag_room1/tag_room1_part2.csv',
+                     './data/data_ewine/dataset2/tag_room1/tag_room1_part3.csv',
+                     './data/data_ewine/dataset2/tag_room1/tag_room1_part4.csv',
+                     './data/data_ewine/dataset2/tag_room1/tag_room1_part5.csv',
+                     './data/data_ewine/dataset2/tag_room1/tag_room1_part6.csv',
+                     './data/data_ewine/dataset2/tag_room1/tag_room1_part7.csv',
+                     './data/data_ewine/dataset2/tag_room1/tag_room1_part8.csv',
+                     './data/data_ewine/dataset2/tag_room1/tag_room1_part9.csv']
+        cir_reg, err_reg, label_reg = load_reg_data(filepaths)
         plt.plot(cir_reg[0], color='green')
-        label_int = label_reg[0][0]
-        label_str = label_int2str('nlos', label_reg)
-
-    plt.savefig("saved_results/%s_sample_%s.png" % (opt.dataset_name, label_str))
-    plt.close()
-    print(cir_reg[0: 5])
-    print(label_reg[0: 5])
-    print(err_reg[0: 5])
+        plt.savefig("saved_results/%s_sample.png" % opt.dataset_name)
+        plt.close()
+        
+    # import extracted features
+    features = feature_extraction(cir_reg)
+    print(features[0])

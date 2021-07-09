@@ -15,14 +15,15 @@ from torch.autograd import Variable
 
 from utils import *
 from dataset import *
-from models import *
+from model import *
 from baseline import svm_regressor
+from test import *
 
 import setproctitle
 import logging
 
 
-def train_vl(opt, network, device, result_path, model_path, dataloader, val_dataloader, optimizer, lr_scheduler, data):
+def train_vl(opt, enc, dec, res, cly, device, result_path, model_path, dataloader, val_dataloader, optimizer, lr_scheduler, data):
     network.train()
 
     # Save training log
@@ -31,9 +32,15 @@ def train_vl(opt, network, device, result_path, model_path, dataloader, val_data
 
     # Load pre-trained model or initialize weights
     if opt.epoch != 0:
-        network.load_state_dict(torch.load(os.path.join(model_path, "Network_%d.pth" % epoch)))
+        enc.load_state_dict(torch.load(os.path.join(model_path, "Enc_%d.pth" % opt.epoch)))
+        dec.load_state_dict(torch.load(os.path.join(model_path, "Dec_%d.pth" % opt.epoch)))
+        res.load_state_dict(torch.load(os.path.join(model_path, "Res_%d.pth" % opt.epoch)))
+        cly.load_state_dict(torch.load(os.path.join(model_path, "Cly_%d.pth" % opt.epoch)))
     else:
-        network.apply(weights_init_normal)
+        enc.apply(weights_init_normal)
+        dec.apply(weights_init_normal)
+        res.apply(weights_init_normal)
+        cly.apply(weights_init_normal)
 
     # Set loss function
     criterion_ae = torch.nn.L1Loss().to(device)
@@ -123,17 +130,23 @@ def train_vl(opt, network, device, result_path, model_path, dataloader, val_data
 
         # Illustrate results on test set
         if epoch % opt.sample_interval == 0:
-            test_vl(opt, network, device, result_path, model_path, 
+            test_vl(opt, enc, dec, res, cly, device, result_path, model_path, 
                 val_dataloader, epoch, data
         )  # epoch for val and opt.test_epoch for test
         
         # Save models at checkpoint
         if opt.checkpoint_interval != -1 and epoch % opt.checkpoint_interval == 0:
-            torch.save(network.load_state_dict(), os.path.join(model_path, "Network_%d.pth" % epoch))
+            torch.save(enc.load_state_dict(), os.path.join(model_path, "Enc_%d.pth" % epoch))
+            torch.save(dec.load_state_dict(), os.path.join(model_path, "Dec_%d.pth" % epoch))
+            torch.save(res.load_state_dict(), os.path.join(model_path, "Res_%d.pth" % epoch))
+            torch.save(cly.load_state_dict(), os.path.join(model_path, "Cly_%d.pth" % epoch))
 
 
-def train_vl_semi(opt, network, device, result_path, model_path, dataloader, val_dataloader, optimizer, lr_scheduler, data):
-    network.train()
+def train_vl_semi(opt, enc, dec, res, cly, device, result_path, model_path, dataloader, val_dataloader, optimizer, lr_scheduler, data):
+    enc.train()
+    dec.train()
+    res.train()
+    cly.train()
 
     # Save training log
     logging.basicConfig(filename=os.path.join(result_path, 'semi_training_log.log'), level=logging.INFO)
@@ -141,9 +154,15 @@ def train_vl_semi(opt, network, device, result_path, model_path, dataloader, val
 
     # Load pre-trained model or initialize weights
     if opt.epoch != 0:
-        network.load_state_dict(torch.load(os.path.join(model_path, "Network_%d.pth" % epoch)))
+        enc.load_state_dict(torch.load(os.path.join(model_path, "Enc_%d.pth" % opt.epoch)))
+        dec.load_state_dict(torch.load(os.path.join(model_path, "Dec_%d.pth" % opt.epoch)))
+        res.load_state_dict(torch.load(os.path.join(model_path, "Res_%d.pth" % opt.epoch)))
+        cly.load_state_dict(torch.load(os.path.join(model_path, "Cly_%d.pth" % opt.epoch)))
     else:
-        network.apply(weights_init_normal)
+        enc.apply(weights_init_normal)
+        dec.apply(weights_init_normal)
+        res.apply(weights_init_normal)
+        cly.apply(weights_init_normal)
 
     # Set loss function
     criterion_ae = torch.nn.L1Loss().to(device)
@@ -233,10 +252,14 @@ def train_vl_semi(opt, network, device, result_path, model_path, dataloader, val
 
         # Illustrate results on test set
         if epoch % opt.sample_interval == 0:
-            test_vl(opt, network, device, result_path, model_path, 
+            test_vl(opt, enc, dec, res, cly, device, result_path, model_path, 
                 val_dataloader, epoch, data
         )  # epoch for val and opt.test_epoch for test
         
         # Save models at checkpoint
         if opt.checkpoint_interval != -1 and epoch % opt.checkpoint_interval == 0:
-            torch.save(network.load_state_dict(), os.path.join(model_path, "Network_%d.pth" % epoch))
+            torch.save(enc.load_state_dict(), os.path.join(model_path, "Enc_%d.pth" % epoch))
+            torch.save(dec.load_state_dict(), os.path.join(model_path, "Dec_%d.pth" % epoch))
+            torch.save(res.load_state_dict(), os.path.join(model_path, "Res_%d.pth" % epoch))
+            torch.save(cly.load_state_dict(), os.path.join(model_path, "Cly_%d.pth" % epoch))
+
