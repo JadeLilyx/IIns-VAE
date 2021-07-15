@@ -15,7 +15,7 @@ from torch.autograd import Variable
 
 from utils import *
 from dataset import *
-from model import *
+from model_sep import *
 from baseline import svm_regressor
 from train import *
 from test import *
@@ -53,53 +53,32 @@ elif opt.dataset_name == 'ewine':
     opt.cir_len = 152
     opt.dataset_env = 'nlos'
     opt.num_classes = 2
-
-# select neural module arrangement method
-if opt.net_ablation == 'loop':
-    Network = EMNet(
-        cir_len=opt.cir_len, num_classes=opt.num_classes, env_dim=opt.env_dim, 
-        filters=opt.filters, enet_type=opt.identifier_type, mnet_type=opt.regressor_type
-    ).to(device)
-elif opt.net_ablation == 'loops':
-    Network = EMNetLoop(
-        cir_len=opt.cir_len, num_classes=opt.num_classes, env_dim=opt.env_dim, 
-        filters=opt.filters, enet_type=opt.identifier_type, mnet_type=opt.regressor_type
-    ).to(device)
-# elif opt.net_ablation == 'detach':
-#     ENet = Identifier(cir_len=opt.cir_len, num_classes=opt.num_classes, env_dim=opt.env_dim,
-#         filters=opt.filters, enet_type=opt.identifier_type).to(device)
-#     MNet = Regressor(cir_len=opt.cir_len, num_classes=opt.num_classes, env_dim=opt.env_dim,
-#         filters=opt.filters, mnet_type=opt.regressor_type).to(device)
-else:
-    raise ValueError("Unknown network arrangement, choices: loop, loops, detach.")
+ENet = IdentifierSep(cir_len=opt.cir_len, num_classes=opt.num_classes, env_dim=opt.env_dim,
+    filters=opt.filters, enet_type=opt.identifier_type).to(device)
+MNet = RegressorSep(cir_len=opt.cir_len, num_classes=opt.num_classes, env_dim=opt.env_dim,
+    filters=opt.filters, mnet_type=opt.regressor_type).to(device)
 
 # Create sample and checkpoint directories
-model_path = "./saved_models_%s/data_%s_%s_mode_%s/enet%d_mnet%d" % (opt.net_ablation, opt.dataset_name, opt.dataset_env, opt.mode, opt.identifier_type, opt.regressor_type)
-train_path = "./saved_results_%s/data_%s_%s_mode_%s/enet%d_mnet%d" % (opt.net_ablation, opt.dataset_name, opt.dataset_env, opt.mode, opt.identifier_type, opt.regressor_type)
+model_path = "./saved_models_sep/data_%s_%s_mode_%s/enet%d_mnet%d" % (opt.dataset_name, opt.dataset_env, opt.mode, opt.identifier_type, opt.regressor_type)
+train_path = "./saved_results_sep/data_%s_%s_mode_%s/enet%d_mnet%d" % (opt.dataset_name, opt.dataset_env, opt.mode, opt.identifier_type, opt.regressor_type)
 os.makedirs(model_path, exist_ok=True)
 os.makedirs(train_path, exist_ok=True)
-test_path = "./saved_results_%s/test/data_%s_%s_mode_%s/enet%d_mnet%d" % (opt.net_ablation, opt.dataset_name, opt.dataset_env, opt.mode, opt.identifier_type, opt.regressor_type)
+test_path = "./saved_results_sep/test/data_%s_%s_mode_%s/enet%d_mnet%d" % (opt.dataset_name, opt.dataset_env, opt.mode, opt.identifier_type, opt.regressor_type)
 os.makedirs(test_path, exist_ok=True)
 
 # Optimizers
-# if opt.net_ablation == 'detach':
-#     optimizer = torch.optim.Adam(
-#         itertools.chain(ENet.parameters(), MNet.parameters()),
-#         lr=opt.lr,
-#         betas=(opt.b1, opt.b2)
-#     )
-# else:
-optimizer = torch.optim.Adam(
-    Network.parameters(),
+optimizerE = torch.optim.Adam(
+    ENet.parameters(),
     lr=opt.lr,
     betas=(opt.b1, opt.b2)
 )
 
+optimizerM = torch.optim.Adam(
+    MNet.parameters(),
+    lr=opt.lr,
+    betas=(opt.b1, opt.b2)
+)
 
-# # Learning rate update schedulers (not used)
-# lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
-#     optimizer, lr_lambda=LambdaLR(opt.n_epochs, opt.epoch, opt.decay_epoch).step
-# )
 
 # Get data
 print("Loading dataset from %s_%s for training." % (opt.dataset_name, opt.dataset_env))
@@ -142,28 +121,26 @@ dataloader_test = DataLoader(
 # ------------- Training --------------
 
 data = data_train, data_test
-# if opt.net_ablation == 'detach':
-#     train_gem(
-#         opt, device=device, tensor=Tensor, result_path=train_path, model_path=model_path, 
-#         dataloader=dataloader_train, val_dataloader=dataloader_test,
-#         optimizer=optimizer, enet=ENet, mnet=MNet, data_raw=data
-#     )
-# else:
-train_gem(
+train_gem_sepE(
     opt, device=device, tensor=Tensor, result_path=train_path, model_path=model_path, 
     dataloader=dataloader_train, val_dataloader=dataloader_test,
-    optimizer=optimizer, network=Network, data_raw=data
+    optimizer_e=optimizerE, enet=ENet, data_raw=data
+)
+
+train_gem_sepM(
+    opt, device=device, tensor=Tensor, result_path=train_path, model_path=model_path, 
+    dataloader=dataloader_train, val_dataloader=dataloader_test,
+    optimizer_m=optimizerM, enet=ENet, mnet=MNet, data_raw=data
 )
 
 # ------------- Testing --------------
 
-# if opt.net_ablation == 'detach':
-#     test_gem(
-#         opt=opt, device=device, tensor=Tensor, result_path=test_path, model_path=model_path, 
-#         dataloader=dataloader_test, enet=ENet, mnet=MNet, epoch=opt.test_epoch, daat_raw=data
-#     )  # epoch for val and opt.test_epoch for test
-# else:
-test_gem(
+test_gem_sepE(
     opt=opt, device=device, tensor=Tensor, result_path=test_path, model_path=model_path, 
-    dataloader=dataloader_test, network=Network, epoch=opt.test_epoch, daat_raw=data
+    dataloader=dataloader_test, enet=ENet, epoch=opt.test_epoch, daat_raw=data
+)  # epoch for val and opt.test_epoch for test
+
+test_gem_sepEM(
+    opt=opt, device=device, tensor=Tensor, result_path=test_path, model_path=model_path, 
+    dataloader=dataloader_test, enet=ENet, mnet=MNet, epoch=opt.test_epoch, data_raw=data
 )  # epoch for val and opt.test_epoch for test
