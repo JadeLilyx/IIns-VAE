@@ -23,26 +23,23 @@ import setproctitle
 import logging
 
 
-def test_gem(opt, device, tensor, result_path, model_path, dataloader, network, epoch, data_raw): 
-    # different for val and test: result_path, epoch
+def test_vl_naive(opt, device, result_path, model_path, dataloader, enc, dec, idy, reg, test_epoch, data_raw, test_flag=False):
+    # different for val and test: result_path, test_epoch
 
-    # Save experimental results (though also in train dir, different log file from 'train_log.log' nevertheless)
-    logging.basicConfig(filename=os.path.join(result_path, 'val_log.log'), level=logging.INFO)
-    logging.info("Started")
+    # Save experimental results
+    logging.basicConfig(filename=os.path.join(result_path, 'val_AE%dIdy%dReg%d' % (opt.conv_type, opt.identifier_type, opt.regressor_type)), level=logging.INFO)
+    # logging.info("Started")
 
     # Load models from path
-    # if opt.net_ablation == 'detach':
-    #     if epoch != 0:
-    #         enet.load_state_dict(torch.load(os.path.join(model_path, "ENet_%d.pth" % opt.epoch)))
-    #         mnet.load_state_dict(torch.load(os.path.join(model_path, "MNet_%d.pth" % opt.epoch)))
-    #         enet.eval()
-    #         mnet.eval()
-    #     else:
-    #         print("No saved models in dirs.")
-    # else:
-    if epoch != 0:
-        network.load_state_dict(torch.load(os.path.join(model_path, "Network_%d.pth" % epoch)))
-        network.eval()
+    if test_epoch != 0:
+        enc.load_state_dict(torch.load(os.path.join(model_path, "Enc_%d.pth" % test_epoch)))
+        dec.load_state_dict(torch.load(os.path.join(model_path, "Dec_%d.pth" % test_epoch)))
+        idy.load_state_dict(torch.load(os.path.join(model_path, "Idy_%d.pth" % test_epoch)))
+        reg.load_state_dict(torch.load(os.path.join(model_path, "Reg_%d.pth" % test_epoch)))
+        enc.eval()
+        dec.eval()
+        idy.eval()
+        reg.eval()
     else:
         print("No saved models in dirs.")
 
@@ -65,17 +62,19 @@ def test_gem(opt, device, tensor, result_path, model_path, dataloader, network, 
 
         with torch.no_grad():
 
-            # Generate estimations
-            # if opt.net_ablation == 'detach':
-            #     label_est, env_latent = enet(cir_gt)
-            #     err_est = mnet(env_latent, cir_gt)
-            # else:
-            label_est, env_latent, err_est = network(cir_gt)
+            # Generate latent representations
+            range_code, env_code, env_code_rv, _ = enc(cir_gt)
+            # 1) reconstruct cir
+            cir_gen = dec(range_code, env_code)
+            # 2) estimated range error
+            err_est = reg(range_code)
+            # 3) estimated env label
+            label_est = idy(env_code_rv)
 
             # Evaluation metrics
             rmse_error += (torch.mean((err_est - err_gt) ** 2)) ** 0.5
             abs_error += torch.mean(torch.abs(err_est - err_gt))
-            time_test = (time.time() - start_time) / 500 # batch_size
+            time_test = (time.time() - start_time) / 500   # batch_size
             rmse_avg = rmse_error / (i + 1)
             abs_avg = abs_error / (i + 1)
             time_avg = time_test / (i + 1)
@@ -84,19 +83,16 @@ def test_gem(opt, device, tensor, result_path, model_path, dataloader, network, 
             accuracy += torch.sum(prediction == label_gtl).float() / label_gt.shape[0]
             accuracy_avg = accuracy / (i + 1)
 
-            ## Illustrate figures
-            # latent env arrays
-            reduced_latents, labels = reduce_latents(env_latent, label_gt)  # not label_gtl
+            # Illustrate figures
+            # 1) latent env arrays (numpy, reduce, append)
+            reduced_latents, labels = reduce_latents(env_code_rv, label_gt)  # not suqeezed label_gtl
             if i == 0:
                 features_arr = reduced_latents
                 labels_arr = labels
-            # elif i != len(dataloader) - 1:
             else:
                 features_arr = np.vstack((features_arr, reduced_latents))
                 labels_arr = np.vstack((labels_arr, labels))
-            # else:  # drop the last batch
-            #     continue
-            # range residual error arrays
+            # 2) range residual error arrays (numpy, append)
             err_real = err_gt.cpu().numpy()
             err_fake = err_est.cpu().numpy()
             if i == 0:
@@ -105,157 +101,61 @@ def test_gem(opt, device, tensor, result_path, model_path, dataloader, network, 
             else:
                 err_real_arr = np.vstack((err_real_arr, err_real))
                 err_fake_arr = np.vstack((err_fake_arr, err_fake))
-        
-        # Print log
-        sys.stdout.write(
-            "\r[Data: %s/%s] [Model Type: Identifier%s_Regressor%s] [Test Epoch: %d] [Batch: %d/%d] \
-            [Error: rmse %f, abs %f, accuracy %f] [Test Time: %f]"
-            % (opt.dataset_name, opt.dataset_env, opt.identifier_type, opt.regressor_type, epoch, i, len(dataloader),
-            rmse_avg, abs_avg, accuracy_avg, time_avg)
-        )
-        logging.info(
-            "\r[Data: %s/%s] [Model Type: Identifier%s_Regressor%s] [Test Epoch: %d] [Batch: %d/%d] \
-            [Error: rmse %f, abs %f, accuracy %f] [Test Time: %f]"
-            % (opt.dataset_name, opt.dataset_env, opt.identifier_type, opt.regressor_type, epoch, i, len(dataloader),
-            rmse_avg, abs_avg, accuracy_avg, time_avg)
-        )
 
-    # latent space visualization
-    visualize_latents(features_arr, labels_arr, result_path, epoch, opt.dataset_env)
-    # CDF ploting of residual error
-    res_em = np.abs(err_real_arr - err_fake_arr)
+        # Print log
+        if test_flag:
+            sys.stdout.write(
+                "\r[Data: %s/%s/%s] [Model Type: AE%d/Idy%d/Reg%d] [Test Epoch: %d] [Batch: %d/%d] "
+                "[RMSE: %f, MAE: %f, ACC: %f, Test Time: %f]"
+                % (opt.dataset_name, opt.dataset_env, opt.mode, opt.conv_type, opt.identifier_type, opt.regressor_type, 
+                test_epoch, i, len(dataloader),
+                rmse_avg, abs_avg, accuracy_avg, time_avg)
+            )
+            logging.info(
+                "[Epoch: %d] [Batch: %d/%d] [RMSE: %f, MAE: %f, ACC: %f, Test Time: %f]"
+                % (test_epoch, i, len(dataloader),
+                rmse_avg, abs_avg, accuracy_avg, time_avg)
+            )
+
+    # 1) Latent space visualization
+    visualize_latents(features_arr, labels_arr, result_path, test_epoch, opt.dataset_env)
+    
+    # 2) CDF plotting of residual error
+    res_ori = np.asarray([item[0] for item in err_real_arr])
+    res_vl_arr = np.abs(err_real_arr - err_fake_arr)
+    res_vl = np.asarray([item[0] for item in res_vl_arr])
+    
     data_train, data_test = data_raw
-    err_svm, err_gt, _, _ = svm_regressor(data_train, data_test)
-    res_svm = np.abs(err_svm - err_gt)
-    accuracy, _, _ = svm_classifier(data_train, data_test)
-    # print residual errors for CDF plotting
-    # print("residual errors: ", res_em)
-    # print(res_svm)
-    # print(err_real_arr)
-    CDF_plot(err_arr=err_real_arr, num=200, color='y')
-    CDF_plot(err_arr=res_em, num=200, color='purple')
-    CDF_plot(err_arr=res_svm, num=200, color='c')
-    plt.legend(["Original error", "Our method", "SVM"], loc='lower right')
-    plt.savefig(os.path.join(result_path, "CDF_%s_%s_%d.png" % (opt.dataset_name, opt.dataset_env, epoch)))
+    res_svm, err_gt, svr_test_time = svm_regressor(data_train, data_test)
+    accuracy, svc_test_time = svm_classifier(data_train, data_test)
+    res_svm = np.asarray(res_svm)
+    
+    CDF_plot(err_arr=res_ori, num=50, color='y', marker='x')
+    CDF_plot(err_arr=res_svm, num=50, color='purple', marker='o')
+    CDF_plot(err_arr=res_vl, num=50, color='c', marker='*')
+    plt.legend(["Unmitigated Error", "SVM", "GEM (Our Method)"])
+    plt.savefig(os.path.join(result_path, "CDF_%s_%s_%d.png" % (opt.dataset_name, opt.dataset_env, test_epoch)))
+    plt.savefig(os.path.join(result_path, "CDF_%s_%s_%d.pdf" % (opt.dataset_name, opt.dataset_env, test_epoch)))
     plt.close()
-    io.savemat(os.path.join(result_path, "residual_em_%s_%s_%d" % (opt.dataset_name, opt.dataset_env, epoch)),
-               {'residual_em': res_em})
-    io.savemat(os.path.join(result_path, "residual_svm_%s_%s_%d" % (opt.dataset_name, opt.dataset_env, epoch)),
-               {'residual_em': res_svm})
-    io.savemat(os.path.join(result_path, "original_%s_%s_%d" % (opt.dataset_name, opt.dataset_env, epoch)),
-               {'residual_em': err_real_arr})
 
 
-def test_gem_sepE(opt, device, tensor, result_path, model_path, dataloader, enet, epoch, data_raw): 
-    # different for val and test: result_path, epoch
+def test_vl_semi(opt, device, result_path, model_path, dataloader, enc, dec, idy, reg, test_epoch, data_raw, test_flag=False):
+    # different for val and test: result_path, test_epoch
 
-    # Save experimental results (though also in train dir, different log file from 'train_log.log' nevertheless)
-    logging.basicConfig(filename=os.path.join(result_path, 'val_logE.log'), level=logging.INFO)
-    logging.info("Started")
+    # Save experimental results
+    logging.basicConfig(filename=os.path.join(result_path, 'val_AE%dIdy%dReg%d' % (opt.conv_type, opt.identifier_type, opt.regressor_type)), level=logging.INFO)
+    # logging.info("Started")
 
     # Load models from path
-    if epoch != 0:
-        enet.load_state_dict(torch.load(os.path.join(model_path, "ENet_%d.pth" % opt.epoch)))
-        enet.eval()
-    else:
-        print("No saved models in dirs.")
-
-    # Evaluation initialization
-    # rmse_error = 0.0
-    # abs_error = 0.0
-    accuracy = 0.0
-    start_time = time.time()
-
-    for i, batch in enumerate(dataloader):
-
-        # Set model input
-        cir_gt = batch["CIR"]
-        # err_gt = batch["Err"]
-        label_gt = batch["Label"]
-        if torch.cuda.is_available():
-            cir_gt = cir_gt.cuda()
-            # err_gt = err_gt.cuda()
-            label_gt = label_gt.to(device=device, dtype=torch.int64)
-
-        with torch.no_grad():
-
-            # Generate estimations
-            label_est = enet(cir_gt)
-            # err_est = mnet(env_latent, cir_gt)
-            
-            # Evaluation metrics
-            # rmse_error += (torch.mean((err_est - err_gt) ** 2)) ** 0.5
-            # abs_error += torch.mean(torch.abs(err_est - err_gt))
-            time_test = (time.time() - start_time) / 500 # batch_size
-            # rmse_avg = rmse_error / (i + 1)
-            # abs_avg = abs_error / (i + 1)
-            time_avg = time_test / (i + 1)
-            label_gtl = label_gt.squeeze()
-            prediction = torch.argmax(label_est, dim=1)
-            accuracy += torch.sum(prediction == label_gtl).float() / label_gt.shape[0]
-            accuracy_avg = accuracy / (i + 1)
-
-            # ## Illustrate figures
-            # # latent env arrays
-            # reduced_latents, labels = reduce_latents(env_latent, label_gt)
-            # if i == 0:
-            #     features_arr = reduced_latents
-            #     labels_arr = labels
-            # elif i != len(dataloader) - 1:
-            #     features_arr = np.vstack((features_arr, reduced_latents))
-            #     labels_arr = np.vstack((labels_arr, labels))
-            # else:  # drop the last batch
-            #     continue
-            # # range residual error arrays
-            # err_real = err_gt.cpu().numpy()
-            # err_fake = err_est.cpu().numpy()
-            # if i == 0:
-            #     err_real_arr = err_real
-            #     err_fake_arr = err_fake
-            # else:
-            #     err_real_arr = np.vstack((err_real_arr, err_real))
-            #     err_fake_arr = np.vstack((err_fake_arr, err_fake))
-        
-        # Print log
-        sys.stdout.write(
-            "\r[Sep Data: %s/%s] [Model Type: Identifier%s] [Test Epoch: %d] [Batch: %d/%d] [accuracy %f] [Test Time: %f]"
-            % (opt.dataset_name, opt.dataset_env, opt.identifier_type, epoch, i, len(dataloader),
-            accuracy_avg, time_avg)
-        )
-        logging.info(
-            "\r[Data: %s/%s] [Model Type: Identifier%s] [Test Epoch: %d] [Batch: %d/%d] [accuracy %f] [Test Time: %f]"
-            % (opt.dataset_name, opt.dataset_env, opt.identifier_type, epoch, i, len(dataloader),
-            accuracy_avg, time_avg)
-        )
-
-    # # latent space visualization
-    # visualize_latents(features_arr, labels_arr, result_path, epoch, opt.dataset_env)
-    # # CDF ploting of residual error
-    # res_em = np.abs(err_real_arr - err_fake_arr)
-    # data_train, data_test = data_raw
-    # err_svm, err_gt, _, _ = svm_regressor(data_train, data_test)
-    # res_svm = np.abs(err_svm - err_gt)
-    # CDF_plot(err_arr=err_real_arr, num=200, color='y')
-    # CDF_plot(err_arr=res_em, num=200, color='purple')
-    # CDF_plot(err_arr=res_svm, num=200, color='c')
-    # plt.legend(["Original error", "Our method", "SVM"], loc='lower right')
-    # plt.savefig(os.path.join(result_path, "CDF_%s_%s_%d.png" % (opt.dataset_name, opt.dataset_env, epoch)))
-    # plt.close()
-
-
-def test_gem_sepEM(opt, device, tensor, result_path, model_path, dataloader, enet, mnet, epoch, data_raw): 
-    # different for val and test: result_path, epoch
-
-    # Save experimental results (though also in train dir, different log file from 'train_log.log' nevertheless)
-    logging.basicConfig(filename=os.path.join(result_path, 'val_log.log'), level=logging.INFO)
-    logging.info("Started")
-
-    # Load models from path
-    if epoch != 0:
-        mnet.load_state_dict(torch.load(os.path.join(model_path, "MNet_%d.pth" % opt.epoch)))
-        mnet.eval()
-        enet.load_state_dict(torch.load(os.path.join(model_path, "ENet_%d.pth" % opt.epoch)))
-        enet.eval()
+    if test_epoch != 0:
+        enc.load_state_dict(torch.load(os.path.join(model_path, "EncE%.2fR%.2f_%d.pth" % (opt.sup_rate_e, opt.sup_rate_r, test_epoch))))
+        dec.load_state_dict(torch.load(os.path.join(model_path, "DecE%.2fR%.2f_%d.pth" % (opt.sup_rate_e, opt.sup_rate_r, test_epoch))))
+        idy.load_state_dict(torch.load(os.path.join(model_path, "IdyE%.2fR%.2f_%d.pth" % (opt.sup_rate_e, opt.sup_rate_r, test_epoch))))
+        reg.load_state_dict(torch.load(os.path.join(model_path, "RegE%.2fR%.2f_%d.pth" % (opt.sup_rate_e, opt.sup_rate_r, test_epoch))))
+        enc.eval()
+        dec.eval()
+        idy.eval()
+        reg.eval()
     else:
         print("No saved models in dirs.")
 
@@ -278,42 +178,37 @@ def test_gem_sepEM(opt, device, tensor, result_path, model_path, dataloader, ene
 
         with torch.no_grad():
 
-            # Generate estimations p(k|r) p(\Delta d|r, k)
-            label_est, env_latent = enet(cir_gt)
-            ##
-            zeros = np.zeros((cir_gt.shape[0], 1)) # as in GAN to build labels
-            ones = np.ones((cir_gt.shape[0], 1))
-            err_est_0 = mnet(cir_gt, zeros)
-            err_est_1 = mnet(cir_gt, ones)
-            # calculate estimated SRI p(\Delta d|r)
-            err_est = label_est[:, 0] * err_est_0 + label_est[:, 1] * err_est_1
+            # Generate latent representations
+            range_code, env_code, env_code_rv, _ = enc(cir_gt)
+            # 1) reconstruct cir
+            cir_gen = dec(range_code, env_code)
+            # 2) estimated range error
+            err_est = reg(range_code)
+            # 3) estimated env label
+            label_est = idy(env_code_rv)
 
             # Evaluation metrics
             rmse_error += (torch.mean((err_est - err_gt) ** 2)) ** 0.5
             abs_error += torch.mean(torch.abs(err_est - err_gt))
-            ##
-            log_likelihood = err_est
-            time_test = (time.time() - start_time) / 500 # batch_size
+            time_test = (time.time() - start_time) / 500   # batch_size
             rmse_avg = rmse_error / (i + 1)
             abs_avg = abs_error / (i + 1)
             time_avg = time_test / (i + 1)
-            label_gtl = label_gt.squeeze()
+            label_gtl = label_gt.squeeze()  # no squeeze affect accuracy but squeeze will affect latent visualization
             prediction = torch.argmax(label_est, dim=1)
             accuracy += torch.sum(prediction == label_gtl).float() / label_gt.shape[0]
             accuracy_avg = accuracy / (i + 1)
 
-            ## Illustrate figures
-            # latent env arrays
-            # reduced_latents, labels = reduce_latents(env_latent, label_gt)
-            # if i == 0:
-            #     features_arr = reduced_latents
-            #     labels_arr = labels
-            # elif i != len(dataloader) - 1:
-            #     features_arr = np.vstack((features_arr, reduced_latents))
-            #     labels_arr = np.vstack((labels_arr, labels))
-            # else:  # drop the last batch
-            #     continue
-            # range residual error arrays
+            # Illustrate figures
+            # 1) latent env arrays (numpy, reduce, append)
+            reduced_latents, labels = reduce_latents(env_code_rv, label_gt)  # not suqeezed label_gtl
+            if i == 0:
+                features_arr = reduced_latents
+                labels_arr = labels
+            else:
+                features_arr = np.vstack((features_arr, reduced_latents))
+                labels_arr = np.vstack((labels_arr, labels))
+            # 2) range residual error arrays (numpy, append)
             err_real = err_gt.cpu().numpy()
             err_fake = err_est.cpu().numpy()
             if i == 0:
@@ -322,29 +217,726 @@ def test_gem_sepEM(opt, device, tensor, result_path, model_path, dataloader, ene
             else:
                 err_real_arr = np.vstack((err_real_arr, err_real))
                 err_fake_arr = np.vstack((err_fake_arr, err_fake))
-        
-        # Print log
-        sys.stdout.write(
-            "\r[Sep Data: %s/%s] [Model Type: Regressor%s] [Test Epoch: %d] [Batch: %d/%d] [Error: rmse %f, abs %f, likelihood %f, accuracy %f] [Test Time: %f]"
-            % (opt.dataset_name, opt.dataset_env, opt.regressor_type, epoch, i, len(dataloader),
-            rmse_avg, abs_avg, log_likelihood, accuracy_avg, time_avg)
-        )
-        logging.info(
-            "\r[Sep Data: %s/%s] [Model Type: Regressor%s] [Test Epoch: %d] [Batch: %d/%d] [Error: rmse %f, abs %f, likelihood %f, accuracy %f] [Test Time: %f]"
-            % (opt.dataset_name, opt.dataset_env, opt.regressor_type, epoch, i, len(dataloader),
-            rmse_avg, abs_avg, log_likelihood, accuracy_avg, time_avg)
-        )
 
-    # latent space visualization
-    # visualize_latents(features_arr, labels_arr, result_path, epoch, opt.dataset_env)
-    # CDF ploting of residual error
-    res_em = np.abs(err_real_arr - err_fake_arr)
+        # Print log
+        if test_flag:
+            sys.stdout.write(
+                "\r[Data: %s/%s/%s] [Model Type: AE%d/Idy%d/Reg%d Semi: R%.2fE%.2f] [Test Epoch: %d] [Batch: %d/%d] "
+                "[RMSE: %f, MAE: %f, ACC: %f, Test Time: %f]"
+                % (opt.dataset_name, opt.dataset_env, opt.mode, opt.conv_type, opt.identifier_type, opt.regressor_type,
+                opt.sup_rate_r, opt.sup_rate_e,
+                test_epoch, i, len(dataloader),
+                rmse_avg, abs_avg, accuracy_avg, time_avg)
+            )
+            logging.info(
+                "[Epoch: %d] [Batch: %d/%d] [RMSE: %f, MAE: %f, ACC: %f, Test Time: %f]"
+                % (test_epoch, i, len(dataloader),
+                rmse_avg, abs_avg, accuracy_avg, time_avg)
+            )
+
+    # 1) Latent space visualization
+    visualize_latents(features_arr, labels_arr, result_path, test_epoch, opt.dataset_env)
+    
+    # 2) CDF plotting of residual error
+    res_ori = np.asarray([item[0] for item in err_real_arr])
+    res_vl_arr = np.abs(err_real_arr - err_fake_arr)
+    res_vl = np.asarray([item[0] for item in res_vl_arr])
+    
     data_train, data_test = data_raw
-    err_svm, err_gt, _, _ = svm_regressor(data_train, data_test)
-    res_svm = np.abs(err_svm - err_gt)
-    CDF_plot(err_arr=err_real_arr, num=200, color='y')
-    CDF_plot(err_arr=res_em, num=200, color='purple')
-    CDF_plot(err_arr=res_svm, num=200, color='c')
-    plt.legend(["Original error", "Our method", "SVM"], loc='lower right')
-    plt.savefig(os.path.join(result_path, "CDF_%s_%s_%d.png" % (opt.dataset_name, opt.dataset_env, epoch)))
+    res_svm, err_gt, svr_test_time = svm_regressor(data_train, data_test)
+    accuracy, svc_test_time = svm_classifier(data_train, data_test)
+    res_svm = np.asarray(res_svm)
+    
+    CDF_plot(err_arr=res_ori, num=50, color='y', marker='x')
+    CDF_plot(err_arr=res_svm, num=50, color='purple', marker='o')
+    CDF_plot(err_arr=res_vl, num=50, color='c', marker='*')
+    plt.legend(["Unmitigated Error", "SVM", "GEM (Our Method)"])
+    plt.savefig(os.path.join(result_path, "CDFE%.2fR%.2f_%d.png" % (opt.sup_rate_e, opt.sup_rate_r, test_epoch)))
+    plt.savefig(os.path.join(result_path, "CDFE%.2fR%.2f_%d.pdf" % (opt.sup_rate_e, opt.sup_rate_r, test_epoch)))
+    plt.close()
+
+
+def test_vl_multisemi(opt, device, result_path, model_path, dataloader, enc, dec, idy, reg, test_epoch, data_raw, sup_rate_e, sup_rate_r, test_flag=False):
+    # different for val and test: result_path, test_epoch
+
+    # Save experimental results
+    logging.basicConfig(filename=os.path.join(result_path, 'testmulti_AE%dIdy%dReg%d' % (opt.conv_type, opt.identifier_type, opt.regressor_type)), level=logging.INFO)
+    # logging.info("Started")
+
+    # Load models from path
+    if test_epoch != 0:
+        enc.load_state_dict(torch.load(os.path.join(model_path, "EncE%.2fR%.2f_%d.pth" % (sup_rate_e, sup_rate_r, test_epoch))))
+        dec.load_state_dict(torch.load(os.path.join(model_path, "DecE%.2fR%.2f_%d.pth" % (sup_rate_e, sup_rate_r, test_epoch))))
+        idy.load_state_dict(torch.load(os.path.join(model_path, "IdyE%.2fR%.2f_%d.pth" % (sup_rate_e, sup_rate_r, test_epoch))))
+        reg.load_state_dict(torch.load(os.path.join(model_path, "RegE%.2fR%.2f_%d.pth" % (sup_rate_e, sup_rate_r, test_epoch))))
+        enc.eval()
+        dec.eval()
+        idy.eval()
+        reg.eval()
+    else:
+        print("No saved models in dirs.")
+
+    # Evaluation initialization
+    rmse_error = 0.0
+    abs_error = 0.0
+    accuracy = 0.0
+    start_time = time.time()
+
+    for i, batch in enumerate(dataloader):
+
+        # Set model input
+        cir_gt = batch["CIR"]
+        err_gt = batch["Err"]
+        label_gt = batch["Label"]
+        if torch.cuda.is_available():
+            cir_gt = cir_gt.cuda()
+            err_gt = err_gt.cuda()
+            label_gt = label_gt.to(device=device, dtype=torch.int64)
+
+        with torch.no_grad():
+
+            # Generate latent representations
+            range_code, env_code, env_code_rv, _ = enc(cir_gt)
+            # 1) reconstruct cir
+            cir_gen = dec(range_code, env_code)
+            # 2) estimated range error
+            err_est = reg(range_code)
+            # 3) estimated env label
+            label_est = idy(env_code_rv)
+
+            # Evaluation metrics
+            rmse_error += (torch.mean((err_est - err_gt) ** 2)) ** 0.5
+            abs_error += torch.mean(torch.abs(err_est - err_gt))
+            time_test = (time.time() - start_time) / 500   # batch_size
+            rmse_avg = rmse_error / (i + 1)
+            abs_avg = abs_error / (i + 1)
+            time_avg = time_test / (i + 1)
+            label_gtl = label_gt.squeeze()  # no squeeze affect accuracy but squeeze will affect latent visualization
+            prediction = torch.argmax(label_est, dim=1)
+            accuracy += torch.sum(prediction == label_gtl).float() / label_gt.shape[0]
+            accuracy_avg = accuracy / (i + 1)
+
+            # Illustrate figures
+            # 1) latent env arrays (numpy, reduce, append)
+            # reduced_latents, labels = reduce_latents(env_code_rv, label_gt)  # not suqeezed label_gtl
+            # if i == 0:
+            #     features_arr = reduced_latents
+            #     labels_arr = labels
+            # else:
+            #     features_arr = np.vstack((features_arr, reduced_latents))
+            #     labels_arr = np.vstack((labels_arr, labels))
+            # 2) range residual error arrays (numpy, append)
+            err_real = err_gt.cpu().numpy()
+            err_fake = err_est.cpu().numpy()
+            if i == 0:
+                err_real_arr = err_real
+                err_fake_arr = err_fake
+            else:
+                err_real_arr = np.vstack((err_real_arr, err_real))
+                err_fake_arr = np.vstack((err_fake_arr, err_fake))
+
+        # Print log
+        if test_flag:
+            sys.stdout.write(
+                "\r[Data: %s/%s/%s] [Model Type: AE%d/Idy%d/Reg%d Semi: R%.2fE%.2f] [Test Epoch: %d] [Batch: %d/%d] "
+                "[RMSE: %f, MAE: %f, ACC: %f, Test Time: %f]"
+                % (opt.dataset_name, opt.dataset_env, opt.mode, opt.conv_type, opt.identifier_type, opt.regressor_type,
+                sup_rate_r, sup_rate_e,
+                test_epoch, i, len(dataloader),
+                rmse_avg, abs_avg, accuracy_avg, time_avg)
+            )
+            logging.info(
+                "[Semi: R%.2fE%.2f Epoch: %d] [Batch: %d/%d] [RMSE: %f, MAE: %f, ACC: %f, Test Time: %f]"
+                % (sup_rate_r, sup_rate_e, test_epoch, i, len(dataloader),
+                rmse_avg, abs_avg, accuracy_avg, time_avg)
+            )
+
+    # 1) Latent space visualization
+    # visualize_latents(features_arr, labels_arr, result_path, test_epoch, opt.dataset_env)
+    
+    # 2) CDF plotting of residual error
+    res_ori = np.asarray([item[0] for item in err_real_arr])
+    res_vl_arr = np.abs(err_real_arr - err_fake_arr)
+    res_vl = np.asarray([item[0] for item in res_vl_arr])
+    
+    CDF_plot(err_arr=res_ori, num=50, color='y', marker='x')
+    CDF_plot(err_arr=res_vl, num=50, marker='*')
+
+
+def test_vl_DeIdy(opt, device, result_path, model_path, dataloader, enc, dec, reg, test_epoch, data_raw, test_flag=False):
+    # different for val and test: result_path, test_epoch
+
+    # Save experimental results
+    logging.basicConfig(filename=os.path.join(result_path, 'valAb2_AE%dReg%d' % (opt.conv_type, opt.regressor_type)), level=logging.INFO)
+    # logging.info("Started")
+
+    # Load models from path
+    if test_epoch != 0:
+        enc.load_state_dict(torch.load(os.path.join(model_path, "Enc_%d.pth" % test_epoch)))
+        dec.load_state_dict(torch.load(os.path.join(model_path, "Dec_%d.pth" % test_epoch)))
+        # idy.load_state_dict(torch.load(os.path.join(model_path, "Idy_%d.pth" % test_epoch)))
+        reg.load_state_dict(torch.load(os.path.join(model_path, "Reg_%d.pth" % test_epoch)))
+        enc.eval()
+        dec.eval()
+        # idy.eval()
+        reg.eval()
+    else:
+        print("No saved models in dirs.")
+
+    # Evaluation initialization
+    rmse_error = 0.0
+    abs_error = 0.0
+    accuracy = 0.0
+    start_time = time.time()
+
+    for i, batch in enumerate(dataloader):
+
+        # Set model input
+        cir_gt = batch["CIR"]
+        err_gt = batch["Err"]
+        label_gt = batch["Label"]
+        if torch.cuda.is_available():
+            cir_gt = cir_gt.cuda()
+            err_gt = err_gt.cuda()
+            label_gt = label_gt.to(device=device, dtype=torch.int64)
+
+        with torch.no_grad():
+
+            # Generate latent representations
+            range_code, env_code, env_code_rv, _ = enc(cir_gt)
+            # 1) reconstruct cir
+            cir_gen = dec(range_code, env_code)
+            # 2) estimated range error
+            err_est = reg(range_code)
+            # 3) estimated env label
+            # label_est = idy(env_code_rv)
+
+            # Evaluation metrics
+            rmse_error += (torch.mean((err_est - err_gt) ** 2)) ** 0.5
+            abs_error += torch.mean(torch.abs(err_est - err_gt))
+            time_test = (time.time() - start_time) / 500   # batch_size
+            rmse_avg = rmse_error / (i + 1)
+            abs_avg = abs_error / (i + 1)
+            time_avg = time_test / (i + 1)
+            # label_gtl = label_gt.squeeze()  # no squeeze affect accuracy but squeeze will affect latent visualization
+            # prediction = torch.argmax(label_est, dim=1)
+            # accuracy += torch.sum(prediction == label_gtl).float() / label_gt.shape[0]
+            # accuracy_avg = accuracy / (i + 1)
+
+            # Illustrate figures
+            # 1) latent env arrays (numpy, reduce, append)
+            reduced_latents, labels = reduce_latents(env_code_rv, label_gt)  # not suqeezed label_gtl
+            if i == 0:
+                features_arr = reduced_latents
+                labels_arr = labels
+            else:
+                features_arr = np.vstack((features_arr, reduced_latents))
+                labels_arr = np.vstack((labels_arr, labels))
+            # 2) range residual error arrays (numpy, append)
+            err_real = err_gt.cpu().numpy()
+            err_fake = err_est.cpu().numpy()
+            if i == 0:
+                err_real_arr = err_real
+                err_fake_arr = err_fake
+            else:
+                err_real_arr = np.vstack((err_real_arr, err_real))
+                err_fake_arr = np.vstack((err_fake_arr, err_fake))
+
+        # Print log
+        if test_flag:
+            sys.stdout.write(
+                "\r[Ablation: %d, Data: %s/%s/%s] [Model Type: AE%d/IdyNone/Reg%d] [Test Epoch: %d] [Batch: %d/%d] "
+                "[RMSE: %f, MAE: %f, Test Time: %f]"
+                % (opt.ablation_type, opt.dataset_name, opt.dataset_env, opt.mode, opt.conv_type, opt.regressor_type, 
+                test_epoch, i, len(dataloader),
+                rmse_avg, abs_avg, time_avg)
+            )
+            logging.info(
+                "[Epoch: %d] [Batch: %d/%d] [RMSE: %f, MAE: %f, Test Time: %f]"
+                % (test_epoch, i, len(dataloader),
+                rmse_avg, abs_avg, time_avg)
+            )
+
+    # 1) Latent space visualization
+    visualize_latents(features_arr, labels_arr, result_path, test_epoch, opt.dataset_env)
+    
+    # 2) CDF plotting of residual error
+    res_ori = np.asarray([item[0] for item in err_real_arr])
+    res_vl_arr = np.abs(err_real_arr - err_fake_arr)
+    res_vl = np.asarray([item[0] for item in res_vl_arr])
+    
+    data_train, data_test = data_raw
+    res_svm, err_gt, svr_test_time = svm_regressor(data_train, data_test)
+    accuracy, svc_test_time = svm_classifier(data_train, data_test)
+    res_svm = np.asarray(res_svm)
+    
+    CDF_plot(err_arr=res_ori, num=50, color='y', marker='x')
+    CDF_plot(err_arr=res_svm, num=50, color='purple', marker='o')
+    CDF_plot(err_arr=res_vl, num=50, color='c', marker='*')
+    plt.legend(["Unmitigated Error", "SVM", "GEM (Our Method)"])
+    plt.savefig(os.path.join(result_path, "CDF_%s_%s_%d.png" % (opt.dataset_name, opt.dataset_env, test_epoch)))
+    plt.savefig(os.path.join(result_path, "CDF_%s_%s_%d.pdf" % (opt.dataset_name, opt.dataset_env, test_epoch)))
+    plt.close()
+
+
+def test_vl_DeIdy_variant(opt, device, result_path, model_path, model_path_ref, dataloader, enc, dec, idy_ref, reg, test_epoch, data_raw, test_flag=False):
+    # advanced test: introduce another identifier (separatedly trained) to test accuracy
+    # different for val and test: result_path, test_epoch
+
+    # Save experimental results
+    logging.basicConfig(filename=os.path.join(result_path, 'valAb2_AE%dReg%d' % (opt.conv_type, opt.regressor_type)), level=logging.INFO)
+    # logging.info("Started")
+
+    # Load models from path
+    if test_epoch != 0:
+        enc.load_state_dict(torch.load(os.path.join(model_path, "Enc_%d.pth" % test_epoch)))
+        dec.load_state_dict(torch.load(os.path.join(model_path, "Dec_%d.pth" % test_epoch)))
+        idy.load_state_dict(torch.load(os.path.join(model_path_ref, "Idy_500.pth")))
+        reg.load_state_dict(torch.load(os.path.join(model_path, "Reg_%d.pth" % test_epoch)))
+        enc.eval()
+        dec.eval()
+        idy.eval()
+        reg.eval()
+    else:
+        print("No saved models in dirs.")
+
+    # Evaluation initialization
+    rmse_error = 0.0
+    abs_error = 0.0
+    accuracy = 0.0
+    start_time = time.time()
+
+    for i, batch in enumerate(dataloader):
+
+        # Set model input
+        cir_gt = batch["CIR"]
+        err_gt = batch["Err"]
+        label_gt = batch["Label"]
+        if torch.cuda.is_available():
+            cir_gt = cir_gt.cuda()
+            err_gt = err_gt.cuda()
+            label_gt = label_gt.to(device=device, dtype=torch.int64)
+
+        with torch.no_grad():
+
+            # Generate latent representations
+            range_code, env_code, env_code_rv, _ = enc(cir_gt)
+            # 1) reconstruct cir
+            cir_gen = dec(range_code, env_code)
+            # 2) estimated range error
+            err_est = reg(range_code)
+            # 3) estimated env label
+            label_est = idy(env_code_rv)
+
+            # Evaluation metrics
+            rmse_error += (torch.mean((err_est - err_gt) ** 2)) ** 0.5
+            abs_error += torch.mean(torch.abs(err_est - err_gt))
+            time_test = (time.time() - start_time) / 500   # batch_size
+            rmse_avg = rmse_error / (i + 1)
+            abs_avg = abs_error / (i + 1)
+            time_avg = time_test / (i + 1)
+            label_gtl = label_gt.squeeze()  # no squeeze affect accuracy but squeeze will affect latent visualization
+            prediction = torch.argmax(label_est, dim=1)
+            accuracy += torch.sum(prediction == label_gtl).float() / label_gt.shape[0]
+            accuracy_avg = accuracy / (i + 1)
+
+            # Illustrate figures
+            # 1) latent env arrays (numpy, reduce, append)
+            reduced_latents, labels = reduce_latents(env_code_rv, label_gt)  # not suqeezed label_gtl
+            if i == 0:
+                features_arr = reduced_latents
+                labels_arr = labels
+            else:
+                features_arr = np.vstack((features_arr, reduced_latents))
+                labels_arr = np.vstack((labels_arr, labels))
+            # 2) range residual error arrays (numpy, append)
+            err_real = err_gt.cpu().numpy()
+            err_fake = err_est.cpu().numpy()
+            if i == 0:
+                err_real_arr = err_real
+                err_fake_arr = err_fake
+            else:
+                err_real_arr = np.vstack((err_real_arr, err_real))
+                err_fake_arr = np.vstack((err_fake_arr, err_fake))
+
+        # Print log
+        if test_flag:
+            sys.stdout.write(
+                "\r[Ablation: %d, Data: %s/%s/%s] [Model Type: AE%d/IdyNone/Reg%d] [Test Epoch: %d] [Batch: %d/%d] "
+                "[RMSE: %f, MAE: %f, ACC: %f, Test Time: %f]"
+                % (opt.ablation_type, opt.dataset_name, opt.dataset_env, opt.mode, opt.conv_type, opt.regressor_type, 
+                test_epoch, i, len(dataloader),
+                rmse_avg, abs_avg, accuracy_avg, time_avg)
+            )
+            logging.info(
+                "[Epoch: %d] [Batch: %d/%d] [RMSE: %f, MAE: %f, ACC: %f, Test Time: %f]"
+                % (test_epoch, i, len(dataloader),
+                rmse_avg, abs_avg, accuracy_avg, time_avg)
+            )
+
+    # 1) Latent space visualization
+    visualize_latents(features_arr, labels_arr, result_path, test_epoch, opt.dataset_env)
+    
+    # 2) CDF plotting of residual error
+    res_ori = np.asarray([item[0] for item in err_real_arr])
+    res_vl_arr = np.abs(err_real_arr - err_fake_arr)
+    res_vl = np.asarray([item[0] for item in res_vl_arr])
+    
+    data_train, data_test = data_raw
+    res_svm, err_gt, svr_test_time = svm_regressor(data_train, data_test)
+    accuracy, svc_test_time = svm_classifier(data_train, data_test)
+    res_svm = np.asarray(res_svm)
+    
+    CDF_plot(err_arr=res_ori, num=50, color='y', marker='x')
+    CDF_plot(err_arr=res_svm, num=50, color='purple', marker='o')
+    CDF_plot(err_arr=res_vl, num=50, color='c', marker='*')
+    plt.legend(["Unmitigated Error", "SVM", "GEM (Our Method)"])
+    plt.savefig(os.path.join(result_path, "CDF_%s_%s_%d.png" % (opt.dataset_name, opt.dataset_env, test_epoch)))
+    plt.savefig(os.path.join(result_path, "CDF_%s_%s_%d.pdf" % (opt.dataset_name, opt.dataset_env, test_epoch)))
+    plt.close()
+
+
+
+def test_vl_DeReg(opt, device, result_path, model_path, dataloader, enc, dec, reg, test_epoch, data_raw, test_flag=False):
+    # different for val and test: result_path, test_epoch
+
+    # Save experimental results
+    logging.basicConfig(filename=os.path.join(result_path, 'valAb3_AE%dIdy%d' % (opt.conv_type, opt.identifier_type)), level=logging.INFO)
+    # logging.info("Started")
+
+    # Load models from path
+    if test_epoch != 0:
+        enc.load_state_dict(torch.load(os.path.join(model_path, "Enc_%d.pth" % test_epoch)))
+        dec.load_state_dict(torch.load(os.path.join(model_path, "Dec_%d.pth" % test_epoch)))
+        idy.load_state_dict(torch.load(os.path.join(model_path, "Idy_%d.pth" % test_epoch)))
+        # reg.load_state_dict(torch.load(os.path.join(model_path, "Reg_%d.pth" % test_epoch)))
+        enc.eval()
+        dec.eval()
+        idy.eval()
+        # reg.eval()
+    else:
+        print("No saved models in dirs.")
+
+    # Evaluation initialization
+    rmse_error = 0.0
+    abs_error = 0.0
+    accuracy = 0.0
+    start_time = time.time()
+
+    for i, batch in enumerate(dataloader):
+
+        # Set model input
+        cir_gt = batch["CIR"]
+        err_gt = batch["Err"]
+        label_gt = batch["Label"]
+        if torch.cuda.is_available():
+            cir_gt = cir_gt.cuda()
+            err_gt = err_gt.cuda()
+            label_gt = label_gt.to(device=device, dtype=torch.int64)
+
+        with torch.no_grad():
+
+            # Generate latent representations
+            range_code, env_code, env_code_rv, _ = enc(cir_gt)
+            # 1) reconstruct cir
+            cir_gen = dec(range_code, env_code)
+            # 2) estimated range error
+            # err_est = reg(range_code)
+            # 3) estimated env label
+            label_est = idy(env_code_rv)
+
+            # Evaluation metrics
+            # rmse_error += (torch.mean((err_est - err_gt) ** 2)) ** 0.5
+            # abs_error += torch.mean(torch.abs(err_est - err_gt))
+            time_test = (time.time() - start_time) / 500   # batch_size
+            # rmse_avg = rmse_error / (i + 1)
+            # abs_avg = abs_error / (i + 1)
+            time_avg = time_test / (i + 1)
+            label_gtl = label_gt.squeeze()  # no squeeze affect accuracy but squeeze will affect latent visualization
+            prediction = torch.argmax(label_est, dim=1)
+            accuracy += torch.sum(prediction == label_gtl).float() / label_gt.shape[0]
+            accuracy_avg = accuracy / (i + 1)
+
+            # Illustrate figures
+            # 1) latent env arrays (numpy, reduce, append)
+            reduced_latents, labels = reduce_latents(env_code_rv, label_gt)  # not suqeezed label_gtl
+            if i == 0:
+                features_arr = reduced_latents
+                labels_arr = labels
+            else:
+                features_arr = np.vstack((features_arr, reduced_latents))
+                labels_arr = np.vstack((labels_arr, labels))
+            # 2) range residual error arrays (numpy, append)
+            err_real = err_gt.cpu().numpy()
+            err_fake = err_est.cpu().numpy()
+            if i == 0:
+                err_real_arr = err_real
+                err_fake_arr = err_fake
+            else:
+                err_real_arr = np.vstack((err_real_arr, err_real))
+                err_fake_arr = np.vstack((err_fake_arr, err_fake))
+
+        # Print log
+        if test_flag:
+            sys.stdout.write(
+                "\r[Ablation: %d, Data: %s/%s/%s] [Model Type: AE%d/Idy%d/RegNone] [Test Epoch: %d] [Batch: %d/%d] "
+                "[ACC: %f, Test Time: %f]"
+                % (opt.ablation_type, opt.dataset_name, opt.dataset_env, opt.mode, opt.conv_type, opt.identifier_type, 
+                test_epoch, i, len(dataloader), accuracy_avg, time_avg)
+            )
+            logging.info(
+                "[Epoch: %d] [Batch: %d/%d] [ACC: %f, Test Time: %f]"
+                % (test_epoch, i, len(dataloader), accuracy_avg, time_avg)
+            )
+
+    # 1) Latent space visualization
+    visualize_latents(features_arr, labels_arr, result_path, test_epoch, opt.dataset_env)
+    
+    # 2) CDF plotting of residual error
+    res_ori = np.asarray([item[0] for item in err_real_arr])
+    res_vl_arr = np.abs(err_real_arr - err_fake_arr)
+    res_vl = np.asarray([item[0] for item in res_vl_arr])
+    
+    data_train, data_test = data_raw
+    res_svm, err_gt, svr_test_time = svm_regressor(data_train, data_test)
+    accuracy, svc_test_time = svm_classifier(data_train, data_test)
+    res_svm = np.asarray(res_svm)
+    
+    CDF_plot(err_arr=res_ori, num=50, color='y', marker='x')
+    CDF_plot(err_arr=res_svm, num=50, color='purple', marker='o')
+    CDF_plot(err_arr=res_vl, num=50, color='c', marker='*')
+    plt.legend(["Unmitigated Error", "SVM", "GEM (Our Method)"])
+    plt.savefig(os.path.join(result_path, "CDF_%s_%s_%d.png" % (opt.dataset_name, opt.dataset_env, test_epoch)))
+    plt.savefig(os.path.join(result_path, "CDF_%s_%s_%d.pdf" % (opt.dataset_name, opt.dataset_env, test_epoch)))
+    plt.close()
+
+
+def test_vl_DeReg_variant(opt, device, result_path, model_path, model_path_ref, dataloader, enc, dec, idy, reg_ref, test_epoch, data_raw, test_flag=False):
+    # advanced test: introduce another regressor (separatedly trained) to test accuracy
+    # different for val and test: result_path, test_epoch
+
+    # Save experimental results
+    logging.basicConfig(filename=os.path.join(result_path, 'valAb3_AE%dReg%d' % (opt.conv_type, opt.regressor_type)), level=logging.INFO)
+    # logging.info("Started")
+
+    # Load models from path
+    if test_epoch != 0:
+        enc.load_state_dict(torch.load(os.path.join(model_path, "Enc_%d.pth" % test_epoch)))
+        dec.load_state_dict(torch.load(os.path.join(model_path, "Dec_%d.pth" % test_epoch)))
+        idy.load_state_dict(torch.load(os.path.join(model_path, "Idy_%d.pth" % test_epoch)))
+        reg.load_state_dict(torch.load(os.path.join(model_path_ref, "Reg_500.pth")))
+        enc.eval()
+        dec.eval()
+        idy.eval()
+        reg.eval()
+    else:
+        print("No saved models in dirs.")
+
+    # Evaluation initialization
+    rmse_error = 0.0
+    abs_error = 0.0
+    accuracy = 0.0
+    start_time = time.time()
+
+    for i, batch in enumerate(dataloader):
+
+        # Set model input
+        cir_gt = batch["CIR"]
+        err_gt = batch["Err"]
+        label_gt = batch["Label"]
+        if torch.cuda.is_available():
+            cir_gt = cir_gt.cuda()
+            err_gt = err_gt.cuda()
+            label_gt = label_gt.to(device=device, dtype=torch.int64)
+
+        with torch.no_grad():
+
+            # Generate latent representations
+            range_code, env_code, env_code_rv, _ = enc(cir_gt)
+            # 1) reconstruct cir
+            cir_gen = dec(range_code, env_code)
+            # 2) estimated range error
+            err_est = reg(range_code)
+            # 3) estimated env label
+            label_est = idy(env_code_rv)
+
+            # Evaluation metrics
+            rmse_error += (torch.mean((err_est - err_gt) ** 2)) ** 0.5
+            abs_error += torch.mean(torch.abs(err_est - err_gt))
+            time_test = (time.time() - start_time) / 500   # batch_size
+            rmse_avg = rmse_error / (i + 1)
+            abs_avg = abs_error / (i + 1)
+            time_avg = time_test / (i + 1)
+            label_gtl = label_gt.squeeze()  # no squeeze affect accuracy but squeeze will affect latent visualization
+            prediction = torch.argmax(label_est, dim=1)
+            accuracy += torch.sum(prediction == label_gtl).float() / label_gt.shape[0]
+            accuracy_avg = accuracy / (i + 1)
+
+            # Illustrate figures
+            # 1) latent env arrays (numpy, reduce, append)
+            reduced_latents, labels = reduce_latents(env_code_rv, label_gt)  # not suqeezed label_gtl
+            if i == 0:
+                features_arr = reduced_latents
+                labels_arr = labels
+            else:
+                features_arr = np.vstack((features_arr, reduced_latents))
+                labels_arr = np.vstack((labels_arr, labels))
+            # 2) range residual error arrays (numpy, append)
+            err_real = err_gt.cpu().numpy()
+            err_fake = err_est.cpu().numpy()
+            if i == 0:
+                err_real_arr = err_real
+                err_fake_arr = err_fake
+            else:
+                err_real_arr = np.vstack((err_real_arr, err_real))
+                err_fake_arr = np.vstack((err_fake_arr, err_fake))
+
+        # Print log
+        if test_flag:
+            sys.stdout.write(
+                "\r[Ablation: %d, Data: %s/%s/%s] [Model Type: AE%d/Idy%d/RegNone] [Test Epoch: %d] [Batch: %d/%d] "
+                "[RMSE: %f, MAE: %f, ACC: %f, Test Time: %f]"
+                % (opt.ablation_type, opt.dataset_name, opt.dataset_env, opt.mode, opt.conv_type, opt.identifier_type, 
+                test_epoch, i, len(dataloader),
+                rmse_avg, abs_avg, accuracy_avg, time_avg)
+            )
+            logging.info(
+                "[Epoch: %d] [Batch: %d/%d] [RMSE: %f, MAE: %f, ACC: %f, Test Time: %f]"
+                % (test_epoch, i, len(dataloader),
+                rmse_avg, abs_avg, accuracy_avg, time_avg)
+            )
+
+    # 1) Latent space visualization
+    visualize_latents(features_arr, labels_arr, result_path, test_epoch, opt.dataset_env)
+    
+    # 2) CDF plotting of residual error
+    res_ori = np.asarray([item[0] for item in err_real_arr])
+    res_vl_arr = np.abs(err_real_arr - err_fake_arr)
+    res_vl = np.asarray([item[0] for item in res_vl_arr])
+    
+    data_train, data_test = data_raw
+    res_svm, err_gt, svr_test_time = svm_regressor(data_train, data_test)
+    accuracy, svc_test_time = svm_classifier(data_train, data_test)
+    res_svm = np.asarray(res_svm)
+    
+    CDF_plot(err_arr=res_ori, num=50, color='y', marker='x')
+    CDF_plot(err_arr=res_svm, num=50, color='purple', marker='o')
+    CDF_plot(err_arr=res_vl, num=50, color='c', marker='*')
+    plt.legend(["Unmitigated Error", "SVM", "GEM (Our Method)"])
+    plt.savefig(os.path.join(result_path, "CDF_%s_%s_%d.png" % (opt.dataset_name, opt.dataset_env, test_epoch)))
+    plt.savefig(os.path.join(result_path, "CDF_%s_%s_%d.pdf" % (opt.dataset_name, opt.dataset_env, test_epoch)))
+    plt.close()
+
+
+def test_vl_DeDecoder(opt, device, result_path, model_path, dataloader, enc, idy, reg, test_epoch, data_raw, test_flag=False):
+    # different for val and test: result_path, test_epoch
+
+    # Save experimental results
+    logging.basicConfig(filename=os.path.join(result_path, 'valAb4_AE%dIdy%dReg%d' % (opt.conv_type, opt.identifier_type, opt.regressor_type)), level=logging.INFO)
+    # logging.info("Started")
+
+    # Load models from path
+    if test_epoch != 0:
+        enc.load_state_dict(torch.load(os.path.join(model_path, "Enc_%d.pth" % test_epoch)))
+        # dec.load_state_dict(torch.load(os.path.join(model_path, "Dec_%d.pth" % test_epoch)))
+        idy.load_state_dict(torch.load(os.path.join(model_path, "Idy_%d.pth" % test_epoch)))
+        reg.load_state_dict(torch.load(os.path.join(model_path, "Reg_%d.pth" % test_epoch)))
+        enc.eval()
+        # dec.eval()
+        idy.eval()
+        reg.eval()
+    else:
+        print("No saved models in dirs.")
+
+    # Evaluation initialization
+    rmse_error = 0.0
+    abs_error = 0.0
+    accuracy = 0.0
+    start_time = time.time()
+
+    for i, batch in enumerate(dataloader):
+
+        # Set model input
+        cir_gt = batch["CIR"]
+        err_gt = batch["Err"]
+        label_gt = batch["Label"]
+        if torch.cuda.is_available():
+            cir_gt = cir_gt.cuda()
+            err_gt = err_gt.cuda()
+            label_gt = label_gt.to(device=device, dtype=torch.int64)
+
+        with torch.no_grad():
+
+            # Generate latent representations
+            range_code, env_code, env_code_rv, _ = enc(cir_gt)
+            # 1) reconstruct cir
+            # cir_gen = dec(range_code, env_code)
+            # 2) estimated range error
+            err_est = reg(range_code)
+            # 3) estimated env label
+            label_est = idy(env_code_rv)
+
+            # Evaluation metrics
+            rmse_error += (torch.mean((err_est - err_gt) ** 2)) ** 0.5
+            abs_error += torch.mean(torch.abs(err_est - err_gt))
+            time_test = (time.time() - start_time) / 500   # batch_size
+            rmse_avg = rmse_error / (i + 1)
+            abs_avg = abs_error / (i + 1)
+            time_avg = time_test / (i + 1)
+            label_gtl = label_gt.squeeze()  # no squeeze affect accuracy but squeeze will affect latent visualization
+            prediction = torch.argmax(label_est, dim=1)
+            accuracy += torch.sum(prediction == label_gtl).float() / label_gt.shape[0]
+            accuracy_avg = accuracy / (i + 1)
+
+            # Illustrate figures
+            # 1) latent env arrays (numpy, reduce, append)
+            reduced_latents, labels = reduce_latents(env_code_rv, label_gt)  # not suqeezed label_gtl
+            if i == 0:
+                features_arr = reduced_latents
+                labels_arr = labels
+            else:
+                features_arr = np.vstack((features_arr, reduced_latents))
+                labels_arr = np.vstack((labels_arr, labels))
+            # 2) range residual error arrays (numpy, append)
+            err_real = err_gt.cpu().numpy()
+            err_fake = err_est.cpu().numpy()
+            if i == 0:
+                err_real_arr = err_real
+                err_fake_arr = err_fake
+            else:
+                err_real_arr = np.vstack((err_real_arr, err_real))
+                err_fake_arr = np.vstack((err_fake_arr, err_fake))
+
+        # Print log
+        if test_flag:
+            sys.stdout.write(
+                "\r[Ablation: %d, Data: %s/%s/%s] [Model Type: AE%d/Idy%d/Reg%d] [Test Epoch: %d] [Batch: %d/%d] "
+                "[RMSE: %f, MAE: %f, ACC: %f, Test Time: %f]"
+                % (opt.ablation_type, opt.dataset_name, opt.dataset_env, opt.mode, opt.conv_type, opt.identifier_type, opt.regressor_type, 
+                test_epoch, i, len(dataloader), rmse_avg, abs_avg, accuracy_avg, time_avg)
+            )
+            logging.info(
+                "[Epoch: %d] [Batch: %d/%d] [RMSE: %f, MAE: %f, ACC: %f, Test Time: %f]"
+                % (test_epoch, i, len(dataloader), rmse_avg, abs_avg, accuracy_avg, time_avg)
+            )
+
+    # 1) Latent space visualization
+    visualize_latents(features_arr, labels_arr, result_path, test_epoch, opt.dataset_env)
+    
+    # 2) CDF plotting of residual error
+    res_ori = np.asarray([item[0] for item in err_real_arr])
+    res_vl_arr = np.abs(err_real_arr - err_fake_arr)
+    res_vl = np.asarray([item[0] for item in res_vl_arr])
+    
+    data_train, data_test = data_raw
+    res_svm, err_gt, svr_test_time = svm_regressor(data_train, data_test)
+    accuracy, svc_test_time = svm_classifier(data_train, data_test)
+    res_svm = np.asarray(res_svm)
+    
+    CDF_plot(err_arr=res_ori, num=50, color='y', marker='x')
+    CDF_plot(err_arr=res_svm, num=50, color='purple', marker='o')
+    CDF_plot(err_arr=res_vl, num=50, color='c', marker='*')
+    plt.legend(["Unmitigated Error", "SVM", "GEM (Our Method)"])
+    plt.savefig(os.path.join(result_path, "CDF_%s_%s_%d.png" % (opt.dataset_name, opt.dataset_env, test_epoch)))
+    plt.savefig(os.path.join(result_path, "CDF_%s_%s_%d.pdf" % (opt.dataset_name, opt.dataset_env, test_epoch)))
     plt.close()

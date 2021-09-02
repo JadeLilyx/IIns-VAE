@@ -7,8 +7,8 @@ import numpy as np
 
 def weights_init_normal(m):
     classname = m.__class__.__name__
-    if isinstance(m, nn.Conv1d) or isinstance(m, nn.conv2d):
-        torch.nn.init.normal_()
+    if isinstance(m, nn.Conv1d) or isinstance(m, nn.Conv2d):
+        torch.nn.init.normal_(m.weight.data, 0.0, 0.02)
     elif isinstance(m, nn.BatchNorm1d) or isinstance(m, nn.BatchNorm2d):
         torch.nn.init.normal_(m.weights.data, 1.0, 0.02)
         torch.nn.init.constant_(m.bias.data, 0.0)
@@ -25,7 +25,7 @@ class LambdaLR:
         return 1.0 - max(0, epoch + self.offset - self.decay_start_epoch) / (self.n_epochs - self.decay_start_epoch)
 
 
-# ------------------ Basic architecture --------------------
+# -------------------- Basic architecture -----------------------
 
 class Encoder(nn.Module):
     def __init__(self, conv_type=1, filters=4, n_residual=3, n_downsample=4, env_dim=8, range_dim=4):
@@ -49,8 +49,8 @@ class Encoder(nn.Module):
             x = x.view(x.size(0), 1, x.size(1), 1).expand((x.size(0), 1, x.size(1), x.size(1)))
 
         range_code = self.range_encoder(x)  # (B, 1, cir_len, cir_len/none) -> (B, 2, 8, 8/none)
-        env_code, env_code_rv, kl_div = self.env_encoder(x)  # (B, 8, 1, 1/none)
-        
+        env_code, env_code_rv, kl_div = self.env_encoder(x)
+
         return range_code, env_code, env_code_rv, kl_div
 
     def sample(self, n):
@@ -86,7 +86,7 @@ class Restorer(nn.Module):
         super(Restorer, self).__init__()
 
         self.use_soft = use_soft
-        
+
         if conv_type == 1:  # (2, 8)
             self.code_shape = (range_dim, 128 // (2 ** n_downsample))
         elif conv_type == 2:  # (2, 8, 8)
@@ -506,7 +506,7 @@ class RestorerLinear(nn.Module):
         # 1d: (B, 16) -> (B, 256) -> (B, 128)
         # 2d: (B, 128) -> (B, 256) -> (B, 128)
 
-        if self.soft:
+        if self.use_soft:
             err_est = self.linear_layer2(err_est)  # 128 -> 2
             mu = err_est[:, 0]
             logvar = err_est[:, 1]
@@ -566,7 +566,7 @@ class RestorerConv1d(nn.Module):
         err_out = self.conv_blocks(err_in)  # (B, 16, 16) -> (B, 128, 2)
         err_est = err_est.view(err_est.size(0), -1)  # (B, 256)
 
-        if self.soft:
+        if self.use_soft:
             err_est = self.linear_layer2(err_est)  # 256 -> 2
             mu = err_est[:, 0]
             logvar = err_est[:, 1]
@@ -626,7 +626,7 @@ class RestorerConv2d(nn.Module):
         err_out = self.conv_blocks(err_in)  # (B, 2, 16, 16) -> (B, 16, 2, 2)
         err_est = err_est.view(err_est.size(0), -1)  # (B, 64)
 
-        if self.soft:
+        if self.use_soft:
             err_est = self.linear_layer2(err_est)  # 64 -> 2
             mu = err_est[:, 0]
             logvar = err_est[:, 1]

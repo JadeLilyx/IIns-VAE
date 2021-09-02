@@ -9,39 +9,37 @@ import joblib
 import matplotlib.pyplot as plt
 
 
-# ------------=- tools for ewine dataset ---------------------
+# ------------------- tools for ewine dataset ----------------
 def load_data_from_file(filepath):
     """
     Read selected .csv file to numpy array
 
     for dataset file like './dataset1/tag_room0.csv':
         + dataset1
-        |__ tag_room0.csv
+        |_ tag_room0.csv
     """
-    # print("Loading" + filepath + "...")
     # read data from file
+    print("Loading " + filepath + "...")
     df = pd.read_csv(filepath, sep=',', header=0)
     output_arr = df.values
-    
+
     return output_arr
 
 
 def load_data_from_folder(folderpath):
     """
-    Read selected .csv file to numpy array (in an inner folder with several .csv files)
+    Read selected .csv file to numpy array (in an inner folder)
 
     for dataset folder like './dataset2/tag_room1/':
         + dataset2
-        |__ tag_room1
-            |__ tag_room_part0.csv
-            |__ tag_room_part1.csv
-            |__ tag_room_part2.csv
-            |__ tag_room_part3.csv
+        |_ tag_room_part0.csv
+        |_ tag_room_part1.csv
+        |_ tag_room_part2.csv
+        |_ tag_room_part3.csv
     """
     rootdir = folderpath
     output_arr = []
     first = 1
-    # folderpath = './dataset2/tag_room1/'
     for dirpath, dirnames, filenames in os.walk(rootdir):
         for file in filenames:
             filename = os.path.join(dirpath, file)
@@ -59,34 +57,34 @@ def load_data_from_folder(folderpath):
     return output_arr
 
 
-def load_reg_data(filepaths):
+def load_reg_data(folderpaths):
     """
     Calculate ranging error and import cir data
 
     Parameters
     -----------
-    filepaths: str, absolute path to input .csv file
+    folderpaths: str, absolute path to input folder with .csv files
 
     Returns
-    ---------
+    --------
     error_arr: numpy.array
         array of ranging errors from input data
     cir_arr: numpy.array
         array of cir vectors from .csv file (length=152)
     """
     # read data from files
-    input_arr = load_data_from_file(filepaths[0])
-    print("Loading " + filepaths[0] + "...")
-    if len(filepaths) > 1:
-        for item in filepaths[1:]:
-            print("Loading " + item + "...")
-            temp = load_data_from_file(item)
+    input_arr = load_data_from_folder(folderpaths[0])
+    # print("Loading " + filepaths[0] + "...")
+    if len(folderpaths) > 1:
+        for item in folderpaths[1:]:
+            # print("Loading " + item + "...")
+            temp = load_data_from_folder(item)
             input_arr = np.vstack((input_arr, temp))
 
     # randomize input array
     np.random.shuffle(input_arr)
 
-    # create blank output_Arrays for error and cir
+    # create blank output_arrays for error and cir
     data_len = 152
     error_arr = np.zeros((len(input_arr), 1))
     label_arr = np.zeros((len(input_arr), 1))
@@ -112,7 +110,60 @@ def load_reg_data(filepaths):
     return cir_arr, error_arr, label_arr
 
 
-#--------------- tools for zenodo dataset --------------------
+def load_reg_data_file(filepaths):
+    """
+    Calculate ranging error and import cir data
+
+    Parameters
+    -----------
+    filepaths: str, absolute path to input .csv file
+
+    Returns
+    --------
+    error_arr: numpy.array
+        array of ranging errors from input data
+    cir_arr: numpy.array
+        array of cir vectors from .csv file (length=152)
+    """
+    # read data from files
+    input_arr = load_data_from_file(filepaths[0])
+    # print("Loading " + filepaths[0] + "...")
+    if len(filepaths) > 1:
+        for item in filepaths[1:]:
+            # print("Loading " + item + "...")
+            temp = load_data_from_file(item)
+            input_arr = np.vstack((input_arr, temp))
+
+    # randomize input array
+    np.random.shuffle(input_arr)
+
+    # create blank output_arrays for error and cir
+    data_len = 152
+    error_arr = np.zeros((len(input_arr), 1))
+    label_arr = np.zeros((len(input_arr), 1))
+    cir_arr = np.zeros((len(input_arr), data_len))
+
+    for i in range(len(input_arr)):
+        fp_idx = int(input_arr[i][8])
+        # calculate ranging error
+        error_arr[i] = math.fabs(
+            math.sqrt(
+                math.pow(input_arr[i][0] - input_arr[i][2], 2) +
+                math.pow(input_arr[i][1] - input_arr[i][3], 2)
+            ) - input_arr[i][4]
+        )  # d_{GT} - d_{M}
+
+        # pack nlos label, 1 if nlos and 0 if los
+        label_arr[i] = input_arr[i][5]
+
+        # pack cir to output cir array (cir/max_amplitude)
+        cir_arr[i] = input_arr[i][fp_idx + 15: fp_idx + 15 + data_len] / float(input_arr[i][17])
+
+    # print(cir_arr.shape)
+    return cir_arr, error_arr, label_arr
+
+
+# ------------------- tools for zenodo dataset ----------------
 def load_pkl_data(filepath, option=None):
     print("Loading " + filepath + "...")
     # read data from file
@@ -121,14 +172,17 @@ def load_pkl_data(filepath, option=None):
     cir_arr = []
     err_arr = []
     label_arr = []
-    if option == 'room_full' or option is None:  # full, 55158
+    if option is None:
+        option == 'room_full'
+    
+    if option == 'room_full':  # full, 55158
         # select samples with room label 0~4
         ds = np.asarray(data[['CIR', 'Error', 'Room']])
         np.random.shuffle(ds)
         cir_arr = np.vstack(ds[:, 0])
         err_arr = np.vstack(ds[:, 1])
-        label_arr = np.vstack(ds[:, 2])  # 55158
-        lroom_arr = label_arr
+        label_arr = np.vstack(ds[:, 2])
+        lroom_arr = label_arr  # to index subsets
 
     elif option == 'obstacle_full':
         # select samples with 10 obstacle labels 0~9
@@ -137,7 +191,7 @@ def load_pkl_data(filepath, option=None):
         cir_arr_1 = np.vstack(ds_1[:, 0])
         err_arr_1 = np.vstack(ds_1[:, 1])
         label_arr_1 = np.zeros((cir_arr_1.shape[0], 1))  # 3987
-        lroom_arr_1 = np.vstack(ds_1[:, 2])  # additional room label for train/test assign
+        lroom_arr_1 = np.vstack(ds_1[:, 2])  # additional room label to index subsets
 
         ds_2 = np.asarray(data.loc[data['Obstacles']=='0000000010'][['CIR', 'Error', 'Room']])
         ds_2 = np.asarray([np.array(x) for x in ds_1])
@@ -220,7 +274,7 @@ def load_pkl_data(filepath, option=None):
         label_arr_los = np.zeros((cir_arr_los.shape[0], 1))
         lroom_arr_los = np.vstack(ds_los[:, 2])
         # print("los samples: ", cir_arr_los.shape[0])  # 4691
-
+        
         number = 1
         for i in range(1, 4):  # 11
             target_str = '0' * (10 - i) + str(number)
@@ -239,7 +293,7 @@ def load_pkl_data(filepath, option=None):
                 lroom_arr_nlos = np.vstack((lroom_arr_nlos, lroom_arr_nlos_i))
             number *= 10
         label_arr_nlos = np.ones((cir_arr_nlos.shape[0], 1))
-        # print("nlos samples: ", cir_arr_nlos.shape[0])  # 6657 for 3 and 26553 for 10 (range(1, 11))
+        # print("nlos samples: ", cir_arr_nlos.shape[0])  #  6657
 
         cir_arr = np.vstack((cir_arr_los, cir_arr_nlos))
         err_arr = np.vstack((err_arr_los, err_arr_nlos))
@@ -414,7 +468,7 @@ def feature_extraction(cir_data):
         feature.append([Er[index1], T_EMD[index1], T_RMS[index1], Kur[index1], R_T[index1], M_AMP[index1]])
 
     return np.asarray(feature)
-            
+
 
 def label_dictionary(dataset_env):
 
@@ -449,6 +503,7 @@ def label_int2str(dataset_env, label_int):
     label_str_dict = label_dictionary(dataset_env)
 
     label_str = label_str_dict[label_int]
+    
     return label_str
 
 
@@ -458,33 +513,24 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset_name", type=str, default="ewine", help="dataset for usage, ewine or zenodo")
-    parser.add_argument("--dataset_env", type=str, default="nlos", help="dataset of different environments")
+    parser.add_argument("--dataset_env", type=str, default="dataset of different environments")
     opt = parser.parse_args()
 
     # import extracted err and cir
     os.makedirs("saved_results", exist_ok=True)
     if opt.dataset_name == 'zenodo':
-        cir_reg, err_reg, label_reg, lroom_reg = load_pkl_data('data/data_zenodo/dataset.pkl', option=opt.dataset_env)
+        cir__reg, err_reg, label_reg, lroom_reg = load_pkl_data("data/data_zenodo/dataset.pkl", option=opt.dataset_env)
         plt.plot(cir_reg[0], color='blue')
+        # convert int label to str
         label_int = label_reg[0][0]
         label_str = label_int2str(opt.dataset_env, label_int)
-        plt.savefig("saved_results/%s_sample_%s.png" % (opt.dataset_name, label_str))
+        plt.savefig("save_results/%s_sample_%s.png" % (opt.dataset_name, label_str))  # .eps
         plt.close()
     elif opt.dataset_name == 'ewine':
-        filepaths = ['./data/data_ewine/dataset1/tag_room0.csv',
-                     './data/data_ewine/dataset1/tag_room1.csv',
-                     './data/data_ewine/dataset2/tag_room0.csv',
-                     './data/data_ewine/dataset2/tag_room1/tag_room1_part0.csv',
-                     './data/data_ewine/dataset2/tag_room1/tag_room1_part1.csv',
-                     './data/data_ewine/dataset2/tag_room1/tag_room1_part2.csv',
-                     './data/data_ewine/dataset2/tag_room1/tag_room1_part3.csv',
-                     './data/data_ewine/dataset2/tag_room1/tag_room1_part4.csv',
-                     './data/data_ewine/dataset2/tag_room1/tag_room1_part5.csv',
-                     './data/data_ewine/dataset2/tag_room1/tag_room1_part6.csv',
-                     './data/data_ewine/dataset2/tag_room1/tag_room1_part7.csv',
-                     './data/data_ewine/dataset2/tag_room1/tag_room1_part8.csv',
-                     './data/data_ewine/dataset2/tag_room1/tag_room1_part9.csv']
-        cir_reg, err_reg, label_reg = load_reg_data(filepaths)
+        folderpaths = ['./data/data_ewine/dataset1/',
+                     './data/data_ewine/dataset2/',
+                     './data/data_ewine/dataset2/tag_room1/']
+        cir_reg, err_reg, label_reg = load_reg_data(folderpaths)
         plt.plot(cir_reg[0], color='green')
         plt.savefig("saved_results/%s_sample.png" % opt.dataset_name)
         plt.close()

@@ -1,16 +1,17 @@
 import numpy as np
 import time
 import os
-import scipy.import
+import scipy.io
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVR, SVC
 
 from data_tools import *
 from dataset import *
+from utils import CDF_plot
 
 
-# ------------- SVM for comparison ---------------
+# -------------------- SVM for comparison -------------------
 
 def svm_regressor(data_train, data_test):
 
@@ -37,7 +38,7 @@ def svm_regressor(data_train, data_test):
     rmse_error = (np.sum((err_est - err_test) ** 2) / err_test.shape[0]) ** 0.5
     abs_error = (np.sum(np.abs(err_est - err_test)) / err_test.shape[0])
     print("SVM Regression Results: rmse %f, abs %f, time %f/%f" % (rmse_error, abs_error, svr_train_time, svr_test_time))
-
+    
     return np.abs(err_est - err_test), np.abs(err_test), svr_test_time
 
 
@@ -48,10 +49,10 @@ def svm_classifier(data_train, data_test):
     cir_train, err_train, label_train = data_train
     cir_test, err_test, label_test = data_test
 
-    # extract feature
+    # extract feature (to compare time)
     train_time = time.time()
-    feature_train = feature_extraction(cir_train)
-
+    features_train = feature_extraction(cir_train)
+    
     # label classification
     clf_cls = make_pipeline(StandardScaler(), SVC(gamma='auto'))
     clf_cls.fit(features_train, label_train.squeeze())
@@ -60,12 +61,12 @@ def svm_classifier(data_train, data_test):
     test_time = time.time()
     features_test = feature_extraction(cir_test)
     label_est = clf_cls.predict(features_test)
-    svc_test_time = time.time() - test_time
+    svc_test_time = (time.time() - test_time) / features_test.shape[0]
 
     # reshape
     label_test = label_test.reshape(label_test.shape[0])
     accuracy = np.sum(label_est == label_test) / label_test.shape[0]
-    print("SVM Classification Result: accuracy %f, time %f/%f" % accuracy, svc_train_time, svc_test_time)
+    print("SVM Classification Result: accuracy %f, time %f/%f" % (accuracy, svc_train_time, svc_test_time))
 
     return accuracy, svc_test_time
 
@@ -98,16 +99,16 @@ if __name__ == '__main__':
 
     # error regression
     res_svm, err_gt, svr_test_time = svm_regressor(data_train, data_test)
-    print("error_abs: ", error_svm[0:10])
-    print("error_gt: ", error_gt[0:10])
+    print("error_abs: ", res_svm[0: 10])
+    print("error_gt: ", err_gt[0: 10])
     save_path = "saved_results/data_%s_%s_mode_%s/SVR" % (opt.dataset_name, opt.dataset_env, opt.mode)
     os.makedirs(save_path, exist_ok=True)
-    CDF_plot(err_gt, num=200, color='y')
-    CDF_plot(res_svm, num=200, color='c')
+    CDF_plot(err_gt, num=20, color='y', marker='o')
+    CDF_plot(res_svm, num=20, color='c', marker='*')
     plt.legend(['Original error', 'SVM'], loc='lower right')
     plt.savefig(os.path.join(save_path, "CDF_svm.png"))
+    plt.savefig(os.path.join(save_path, "CDF_svm.eps"))
     plt.close()
-    
+
     # env classification
     accuracy, svc_test_time = svm_classifier(data_train, data_test)
-

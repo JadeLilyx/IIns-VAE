@@ -8,7 +8,7 @@ import sys
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as FloatTensor
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import datasets
 from torch.autograd import Variable
@@ -16,19 +16,13 @@ from torch.autograd import Variable
 from utils import *
 from dataset import *
 from model import *
-from baseline import svm_regressor
 from train import *
 from test import *
 
-import setproctitle
-import logging
-
-
-setproctitle.setproctitle("UWB_EM")
 
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-Tensor = torch.cuda.FloatTensor if torch.cuda.is_available() else torch.Tensor
+# Tensor = torch.cuda.FloatTensor if torch.cuda.is_available() else torch.Tensor
 
 # Get arguments
 parser = argparse.ArgumentParser()
@@ -36,7 +30,7 @@ parser = get_args(parser)
 opt = parser.parse_args()
 print(opt)
 
-# Initialize network
+# Initialize networks
 if opt.dataset_name == 'zenodo':
     opt.cir_len = 157
     if opt.dataset_env == 'room_full':
@@ -47,86 +41,74 @@ if opt.dataset_name == 'zenodo':
         opt.num_classes = 2
     elif opt.dataset_env == 'room_part':
         opt.num_classes = 3
-    elif opt.data_env == 'obstacle_part':
+    elif opt.dataset_env == 'obstacle_part':
         opt.num_classes = 4
 elif opt.dataset_name == 'ewine':
     opt.cir_len = 152
     opt.dataset_env = 'nlos'
     opt.num_classes = 2
 
-# select neural module arrangement method
-if opt.net_ablation == 'loop':
-    Network = EMNet(
-        cir_len=opt.cir_len, num_classes=opt.num_classes, env_dim=opt.env_dim, 
-        filters=opt.filters, enet_type=opt.identifier_type, mnet_type=opt.regressor_type
-    ).to(device)
-elif opt.net_ablation == 'loops':
-    Network = EMNetLoop(
-        cir_len=opt.cir_len, num_classes=opt.num_classes, env_dim=opt.env_dim, 
-        filters=opt.filters, enet_type=opt.identifier_type, mnet_type=opt.regressor_type
-    ).to(device)
-# elif opt.net_ablation == 'detach':
-#     ENet = Identifier(cir_len=opt.cir_len, num_classes=opt.num_classes, env_dim=opt.env_dim,
-#         filters=opt.filters, enet_type=opt.identifier_type).to(device)
-#     MNet = Regressor(cir_len=opt.cir_len, num_classes=opt.num_classes, env_dim=opt.env_dim,
-#         filters=opt.filters, mnet_type=opt.regressor_type).to(device)
-else:
-    raise ValueError("Unknown network arrangement, choices: loop, loops, detach.")
+
+# Select neural module arrangement
+scale_factor = 2 ** opt.n_downsample
+if opt.conv_type == 1:
+    range_code_shape = (opt.range_dim, 128 // (2 ** opt.n_downsample))
+elif opt.conv_type == 2:
+    range_code_shape = (opt.range_dim, 128 // (2 ** opt.n_downsample), 128 // (2 ** opt.n_downsample))
+Enc = Encoder(
+    conv_type=opt.conv_type, filters=opt.filters, n_residual=opt.n_residual, n_downsample=opt.n_downsample,
+    env_dim=opt.env_dim, range_dim=opt.range_dim
+).to(device)
+Dec = Decoder(
+    conv_type=opt.conv_type, filters=opt.filters, n_residual=opt.n_residual, n_upsample=opt.n_downsample,
+    env_dim=opt.env_dim, range_dim=opt.range_dim, out_dim=opt.cir_len
+).to(device)
+Idy = Classifier(
+    env_dim=opt.env_dim, num_classes=opt.num_classes, filters=opt.filters, layer_type=opt.identifier_type
+).to(device)
+Reg = Restorer(
+    use_soft=opt.use_soft, layer_type=opt.regressor_type, conv_type=opt.conv_type,
+    range_dim=opt.range_dim, n_downsample=opt.n_downsample
+).to(device)
 
 # Create sample and checkpoint directories
-model_path = "./saved_models_%s/data_%s_%s_mode_%s/enet%d_mnet%d" % (opt.net_ablation, opt.dataset_name, opt.dataset_env, opt.mode, opt.identifier_type, opt.regressor_type)
-train_path = "./saved_results_%s/data_%s_%s_mode_%s/enet%d_mnet%d" % (opt.net_ablation, opt.dataset_name, opt.dataset_env, opt.mode, opt.identifier_type, opt.regressor_type)
+model_path = "saved_models_ab%d/data_%s_%s_mode_%s/ae%didy%dreg%d/" % (opt.ablation_type, opt.dataset_name, opt.dataset_env, opt.mode, opt.conv_type, opt.identifier_type, opt.regressor_type)
+train_path = "saved_results_ab%d/data_%s_%s_mode_%s/ae%didy%dreg%d/" % (opt.ablation_type, opt.dataset_name, opt.dataset_env, opt.mode, opt.conv_type, opt.identifier_type, opt.regressor_type)
 os.makedirs(model_path, exist_ok=True)
 os.makedirs(train_path, exist_ok=True)
-test_path = "./saved_results_%s/test/data_%s_%s_mode_%s/enet%d_mnet%d" % (opt.net_ablation, opt.dataset_name, opt.dataset_env, opt.mode, opt.identifier_type, opt.regressor_type)
+test_path = "saved_results_ab%d/test/data_%s_%s_mode_%s/ae%didy%dreg%d/" % (opt.ablation_type, opt.dataset_name, opt.dataset_env, opt.mode, opt.conv_type, opt.identifier_type, opt.regressor_type)
 os.makedirs(test_path, exist_ok=True)
 
 # Optimizers
-# if opt.net_ablation == 'detach':
-#     optimizer = torch.optim.Adam(
-#         itertools.chain(ENet.parameters(), MNet.parameters()),
-#         lr=opt.lr,
-#         betas=(opt.b1, opt.b2)
-#     )
-# else:
 optimizer = torch.optim.Adam(
-    Network.parameters(),
+    itertools.chain(Enc.parameters(), Dec.parameters(), Idy.parameters(), Reg.parameters()),
     lr=opt.lr,
     betas=(opt.b1, opt.b2)
 )
 
-
-# # Learning rate update schedulers (not used)
-# lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
-#     optimizer, lr_lambda=LambdaLR(opt.n_epochs, opt.epoch, opt.decay_epoch).step
-# )
+# Learning rate update schedulers (optional)
+lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
+    optimizer, lr_lambda=LambdaLR(opt.n_epochs, opt.epoch, opt.decay_epoch).step
+)
 
 # Get data
 print("Loading dataset from %s_%s for training." % (opt.dataset_name, opt.dataset_env))
 if opt.dataset_name == 'zenodo':
     root = './data/data_zenodo/dataset.pkl'
 elif opt.dataset_name == 'ewine':
-    filepaths = ['./data/data_ewine/dataset1/tag_room0.csv',
-                 './data/data_ewine/dataset1/tag_room1.csv',
-                 './data/data_ewine/dataset2/tag_room0.csv',
-                 './data/data_ewine/dataset2/tag_room1/tag_room1_part0.csv',
-                 './data/data_ewine/dataset2/tag_room1/tag_room1_part1.csv',
-                 './data/data_ewine/dataset2/tag_room1/tag_room1_part2.csv',
-                 './data/data_ewine/dataset2/tag_room1/tag_room1_part3.csv',
-                 './data/data_ewine/dataset2/tag_room1/tag_room1_part4.csv',
-                 './data/data_ewine/dataset2/tag_room1/tag_room1_part5.csv',
-                 './data/data_ewine/dataset2/tag_room1/tag_room1_part6.csv',
-                 './data/data_ewine/dataset2/tag_room1/tag_room1_part7.csv',
-                 './data/data_ewine/dataset2/tag_room1/tag_room1_part8.csv',
-                 './data/data_ewine/dataset2/tag_room1/tag_room1_part9.csv']
-    root = filepaths
+    folderpaths = ['./data/data_ewine/dataset1/',
+                 './data/data_ewine/dataset2/',
+                 './data/data_ewine/dataset2/tag_room1/']
+    root = folderpaths
+else:
+    raise RuntimeError("Unknown dataset for usage.")
 
 data_train, data_test = assign_train_test(opt, root)
 
 # Configure dataloaders
 dataloader_train = DataLoader(
     dataset=UWBDataset(data_train),
-    batch_size=opt.batch_size,
+    batch_size=opt.batch_size,  # 500
     shuffle=True,
     num_workers=8,
 )
@@ -139,31 +121,77 @@ dataloader_test = DataLoader(
 )
 
 
-# ------------- Training --------------
+# ------------- Training and Testing ----------------
 
 data = data_train, data_test
-# if opt.net_ablation == 'detach':
-#     train_gem(
-#         opt, device=device, tensor=Tensor, result_path=train_path, model_path=model_path, 
-#         dataloader=dataloader_train, val_dataloader=dataloader_test,
-#         optimizer=optimizer, enet=ENet, mnet=MNet, data_raw=data
-#     )
-# else:
-train_gem(
-    opt, device=device, tensor=Tensor, result_path=train_path, model_path=model_path, 
-    dataloader=dataloader_train, val_dataloader=dataloader_test,
-    optimizer=optimizer, network=Network, data_raw=data
-)
+# choose ablation cases
+if opt.ablation_type == 0:
+    train_vl_naive(
+        opt, device=device, result_path=train_path, model_path=model_path,
+        dataloader=dataloader_train, val_dataloader=dataloader_test, optimizer=optimizer, scheduler=lr_scheduler,
+        enc=Enc, dec=Dec, idy=Idy, reg=Reg, data_raw=data
+    )
+    
+    test_vl_naive(
+        opt=opt, device=device, result_path=test_path, model_path=model_path,
+        dataloader=dataloader_test, enc=Enc, dec=Dec, idy=Idy, reg=Reg,
+        test_epoch=opt.test_epoch, data_raw=data, test_flag=True
+    )
 
-# ------------- Testing --------------
+elif opt.ablation_type == 1:
+    # same as type 0 if opt.sup_rate_r=opt.sup_rate_e=1, more general and can be merged
+    train_vl_semi(
+        opt, device=device, result_path=train_path, model_path=model_path,
+        dataloader=dataloader_train, val_dataloader=dataloader_test, optimizer=optimizer, scheduler=lr_scheduler,
+        enc=Enc, dec=Dec, idy=Idy, reg=Reg, data_raw=data
+    )
 
-# if opt.net_ablation == 'detach':
-#     test_gem(
-#         opt=opt, device=device, tensor=Tensor, result_path=test_path, model_path=model_path, 
-#         dataloader=dataloader_test, enet=ENet, mnet=MNet, epoch=opt.test_epoch, daat_raw=data
-#     )  # epoch for val and opt.test_epoch for test
-# else:
-test_gem(
-    opt=opt, device=device, tensor=Tensor, result_path=test_path, model_path=model_path, 
-    dataloader=dataloader_test, network=Network, epoch=opt.test_epoch, daat_raw=data
-)  # epoch for val and opt.test_epoch for test
+    test_vl_semi(
+        opt=opt, device=device, result_path=test_path, model_path=model_path,
+        dataloader=dataloader_test, enc=Enc, dec=Dec, idy=Idy, reg=Reg,
+        test_epoch=opt.test_epoch, data_raw=data,
+        test_flag=True
+    )
+
+elif opt.ablation_type == 2:
+    train_vl_DeIdy(
+        opt, device=device, result_path=train_path, model_path=model_path,
+        dataloader=dataloader_train, val_dataloader=dataloader_test, optimizer=optimizer, scheduler=lr_scheduler,
+        enc=Enc, dec=Dec, reg=Reg, data_raw=data
+    )
+    # read additional identifier for testing
+    idy_path = "saved_models_ab0/data_%s_%s_mode_%s/ae%didy%dreg%d/" % (opt.dataset_name, opt.dataset_env, opt.mode, opt.conv_type, opt.identifier_type, opt.regressor_type)
+    test_vl_DeIdy_variant(
+        opt=opt, device=device, result_path=test_path, model_path=model_path, model_path_ref=idy_path,
+        dataloader=dataloader_test, enc=Enc, dec=Dec, reg=Reg, idy_ref=Idy,
+        test_epoch=opt.test_epoch, data_raw=data, test_flag=True
+    )
+
+elif opt.ablation_type == 3:
+    train_vl_DeReg(
+        opt, device=device, result_path=train_path, model_path=model_path,
+        dataloader=dataloader_train, val_dataloader=dataloader_test, optimizer=optimizer, scheduler=lr_scheduler,
+        enc=Enc, dec=Dec, idy=Idy, data_raw=data
+    )
+    # read additional identifier for testing
+    reg_path = "saved_models_ab0/data_%s_%s_mode_%s/ae%didy%dreg%d/" % (opt.dataset_name, opt.dataset_env, opt.mode, opt.conv_type, opt.identifier_type, opt.regressor_type)
+    test_vl_DeReg_variant(
+        opt=opt, device=device, result_path=test_path, model_path=model_path, model_path_ref=reg_path,
+        dataloader=dataloader_test, enc=Enc, dec=Dec, idy=Idy, reg_ref=Reg,
+        test_epoch=opt.test_epoch, data_raw=data, test_flag=True
+    )
+
+elif opt.ablation_type == 4:
+    train_vl_DeDec(
+        opt, device=device, result_path=train_path, model_path=model_path,
+        dataloader=dataloader_train, val_dataloader=dataloader_test, optimizer=optimizer, scheduler=lr_scheduler,
+        enc=Enc, idy=Idy, reg=Reg, data_raw=data
+    )
+    test_vl_DeRec(
+        opt=opt, device=device, result_path=test_path, model_path=model_path,
+        dataloader=dataloader_test, enc=Enc, idy=Idy, reg=Reg,
+        test_epoch=opt.test_epoch, data_raw=data, test_flag=True
+    )
+else:
+    raise ValueError("Unknown ablation study type, choices 0~4.")
+
