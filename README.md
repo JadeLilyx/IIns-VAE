@@ -1,5 +1,5 @@
-# UWB_VL
-Variational Learning for Simultaneous Range Error Mitigation and Environment Identification
+# IIns-VAE
+A Variational Learning Approach for Concurrent Distance Estimation and Environmental Identification
 
 1. Simultaneous Range Error Mitigation and Environment Identification
 ```
